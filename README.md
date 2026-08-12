@@ -57,6 +57,18 @@ The app ships with a tiny, dependency-free config layer (`juice_director.py` + `
 
 Configurable parameters (defaults in parentheses): fill target mL (300), within-subgroup σ (2.0), spec low/high (294 / 306), subgroup size *n* (5; one of 2–7), baseline subgroups (24), bottles inspected/shift (200), in-control fraction defective (0.04), $ per missed signal / Type II (12000), $ per false alarm / Type I (3500), trend length (5), and the completion-code secret (`squeeze-control-2026`). Out-of-range or invalid values fall back to the default. The control-chart constants (A₂, D₃, D₄, d₂) are **not** configurable — they're fixed statistical constants keyed by subgroup size.
 
+## Student progress & persistence (optional)
+
+The app can save each student's progress and give them a **stable, unique scenario** that resumes across visits, via `student_store.py` (encrypted records in Dropbox). This is entirely optional: **when the storage secrets are not configured, every storage call is a safe no-op and the app behaves exactly as above.**
+
+When it *is* configured (see the secrets below):
+
+- Students are identified by `?sid=<student id>` (a one-field sign-in gate appears if it's missing). The scenario seed is derived deterministically from the student id, so the same student always gets the same baseline, limits, and first weeks.
+- Progress autosaves after each meaningful step (baseline collected, each phase, every weekly submission, finishing). A refresh restores where they left off — the `?sid=` in the URL makes this automatic.
+- On finish, a completion record (student, code, score) is written for the instructor roster.
+
+Required secrets (environment variables or `.streamlit/secrets.toml`): `DB_ENCRYPTION_KEY`, plus either `DROPBOX_REFRESH_TOKEN` + `DROPBOX_APP_KEY` + `DROPBOX_APP_SECRET`, or `DROPBOX_ACCESS_TOKEN`. Optional: `PROGRESS_ROOT`, `GAMES_ROOT`. With storage enabled you must install the `dropbox` and `cryptography` packages (already in `requirements.txt`).
+
 ## Grading with the LMS completion code
 
 When a student finishes, the Results page generates a code like `SQZ-12-0128-4913A0` encoding their **weeks played** and **score**, plus a checksum tied to their name and a secret salt.
@@ -103,6 +115,7 @@ juicetification-squeeze-control/
 ├── juicetification.py     # the Streamlit app (run this)
 ├── juice_director.py      # shared config loader (unchanged across apps)
 ├── manifest.py            # this app's configurable-parameter schema
+├── student_store.py       # optional per-student progress persistence
 ├── verify_code.py         # instructor grading tool
 ├── requirements.txt       # Python dependencies
 ├── instructions.pdf       # one-page visual quick-start (for students)

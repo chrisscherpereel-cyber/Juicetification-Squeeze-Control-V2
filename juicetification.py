@@ -34,6 +34,7 @@ from plotly.subplots import make_subplots
 
 from juice_director import resolve_config, serve_manifest_if_requested
 from manifest import MANIFEST
+import student_store as store
 
 serve_manifest_if_requested(MANIFEST)          # (A) ?manifest=1 → emit schema & stop
 CFG, CTX = resolve_config(MANIFEST)            # (B) instructor config → params, context
@@ -71,6 +72,13 @@ TREND_LEN = CFG["trend_len"]  # trend = this many in a row steadily rising/falli
 
 # Director seed: when provided, the whole session is reproducible; else random.
 SEED = CTX["seed"]
+
+# --- Per-student identity: a stable, unique scenario seeded from the student id.
+#     (No-op when student_store is unconfigured — SID stays None, SEED unchanged.)
+GAME = store.game_code()
+SID = store.get_student_id()
+if SID is not None:
+    SEED = store.derive_seed(GAME, SID, lo=1, hi=10 ** 6)
 
 GOOD_COLOR = "#ff7a00"    # good juice = orange
 BAD_COLOR  = "#2ecc71"    # defective  = green
@@ -937,6 +945,82 @@ def init_state():
         ss.setdefault(k, v)
 
 
+# -----------------------------------------------------------------------------
+# 1b. PERSISTENCE — save/restore student progress (safe no-op when unconfigured)
+# -----------------------------------------------------------------------------
+PROGRESS_KEYS = [
+    "phase", "baseline", "p_baseline", "limits", "p_limits", "score", "rounds_played",
+    "us_sub", "us_counts", "us_plan",
+    "answered", "stream_done", "reveal_pending", "ocap_scored",
+    "shipped_bad", "stopped_good", "speed_label",
+    "funnel_noise", "funnel_i", "funnel_setting", "funnel_you", "funnel_adjusts",
+    "funnel_pending", "funnel_last_e",
+    "target_weeks", "picks", "total_signals", "total_caught", "total_false",
+    "week_missed", "week_false", "lot_base", "sub_n", "p_inspect",
+]
+_ARRAY_KEYS = {"baseline", "p_baseline", "us_sub", "us_counts", "funnel_noise"}
+
+
+def _json_safe(v):
+    """Convert numpy arrays/scalars, sets, and nested containers to plain JSON."""
+    if isinstance(v, np.ndarray):
+        return v.tolist()
+    if isinstance(v, np.integer):
+        return int(v)
+    if isinstance(v, np.floating):
+        return float(v)
+    if isinstance(v, set):
+        return sorted(v)
+    if isinstance(v, dict):
+        return {k: _json_safe(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_json_safe(x) for x in v]
+    return v
+
+
+def _restore_value(k, v):
+    """Rebuild numpy arrays / sets that JSON flattened to lists."""
+    if v is None:
+        return None
+    if k in _ARRAY_KEYS:
+        return np.array(v)
+    if k == "picks":
+        return {kk: set(vv) for kk, vv in v.items()}
+    if k in ("limits", "p_limits"):
+        return {kk: (np.array(vv) if isinstance(vv, list) else vv) for kk, vv in v.items()}
+    return v
+
+
+def progress_snapshot():
+    """A plain-JSON snapshot of just the progress keys (no figures/RNG/widgets)."""
+    ss = st.session_state
+    return {k: _json_safe(ss[k]) for k in PROGRESS_KEYS if k in ss}
+
+
+def autosave():
+    """Persist progress after a meaningful step. Best-effort; never crashes the lab."""
+    if store.enabled() and SID:
+        try:
+            store.save(GAME, SID, progress_snapshot())
+        except Exception:
+            pass
+
+
+def restore_progress():
+    """Copy saved progress back into session_state, once per session."""
+    ss = st.session_state
+    if not (store.enabled() and SID) or ss.get("_restored"):
+        return
+    ss["_restored"] = True
+    try:
+        saved = store.load(GAME, SID)
+    except Exception:
+        saved = {}
+    for k in PROGRESS_KEYS:
+        if k in saved:
+            ss[k] = _restore_value(k, saved[k])
+
+
 def new_us_round():
     ss = st.session_state
     lim, plim = ss.limits, ss.p_limits
@@ -1012,9 +1096,26 @@ def us_detection():
 # -----------------------------------------------------------------------------
 def main():
     st.set_page_config(page_title="Juicetification: Squeeze Control", page_icon="🧃", layout="wide")
+
+    # Student sign-in gate — only when storage is configured (else behave as today).
+    if store.enabled() and SID is None:
+        st.markdown("## 🧃 Juicetification: Squeeze Control")
+        st.write("You'll get the same scenario every time you return, and your progress "
+                 "is saved automatically.")
+        entered = st.text_input("Enter your student ID to begin", key="_sid_entry")
+        if st.button("Start", type="primary"):
+            if entered.strip():
+                store.set_student_id(entered.strip())
+                st.rerun()
+            else:
+                st.warning("Please enter a student ID.")
+        st.stop()
+
     init_state()
     inject_theme()
     ss = st.session_state
+
+    restore_progress()          # copy any saved progress back into session_state
 
     # Persistent factory HUD — brand, running line, product SKU, lot, shift.
     if ss.phase == 4:
@@ -1030,6 +1131,8 @@ def main():
     factory_hud(hud_plant, hud_lot, hud_shift)
     st.caption("Juicetification: Squeeze Control — Statistical Process Control, "
                "one bottling line at a time.")
+    if store.enabled() and SID:
+        st.caption(f"Signed in as {SID} · progress saved automatically")
 
     with st.sidebar:
         st.header("Career status")
@@ -1068,6 +1171,7 @@ def main():
             ss.p_baseline = make_defects(N_BASELINE, P_BASELINE_RATE, ss.rng, n_inspect=ss.p_inspect)
             animate_collection(chart_ph, bottle_ph, grid_ph, ss.baseline, ss.p_baseline,
                                delay, p_inspect=ss.p_inspect)
+            autosave()
 
         if ss.baseline is not None:
             means = ss.baseline.mean(axis=1)
@@ -1087,7 +1191,7 @@ def main():
                         f'{means.mean():.2f} mL · avg defects/shift ≈ {ss.p_baseline.mean():.1f}</div>',
                         unsafe_allow_html=True)
             if st.button("➡️ Next: a quick experiment before we build charts"):
-                ss.phase = 2; st.rerun()
+                ss.phase = 2; autosave(); st.rerun()
 
     # ---------------------------------------------------- INTERLUDE · FUNNEL
     elif ss.phase == 2:
@@ -1230,7 +1334,7 @@ def main():
                             "really a signal — so you act on causes, not on noise. Let's build "
                             "those charts.", **MARGIT)
                 if st.button("➡️ Proceed to build the charts"):
-                    ss.phase = 3; st.rerun()
+                    ss.phase = 3; autosave(); st.rerun()
 
     # ------------------------------------------------------------------ ACT 2
     elif ss.phase == 3:
@@ -1461,7 +1565,7 @@ def main():
                         use_container_width=True, key="a2_p")
         if st.button("✅ Certify charts & open the US franchise"):
             ss.limits, ss.p_limits, ss.phase = lim, plim, 4
-            new_us_round(); st.rerun()
+            new_us_round(); autosave(); st.rerun()
 
     # ------------------------------------------------------------------ ACT 3
     elif ss.phase == 4:
@@ -1552,6 +1656,7 @@ def main():
                 ss.rounds_played += 1
                 ss.answered = True
                 ss.reveal_pending = True
+                autosave()
                 st.rerun()
         else:
             if ss.reveal_pending:
@@ -1668,7 +1773,7 @@ def main():
                     st.warning("Stopping a stable line is a false alarm — a needless line stop "
                                "that costs output for no reason.")
                 if st.button("▶️ Next production week"):
-                    new_us_round(); st.rerun()
+                    new_us_round(); autosave(); st.rerun()
 
         # ---- Progress toward the diagnosis goal & finish -------------------
         st.divider()
@@ -1676,7 +1781,7 @@ def main():
         st.progress(min(done / goal, 1.0), text=f"Weeks diagnosed: {done} / {goal}")
         if done >= goal:
             if st.button("🏁 Finish & view your results", type="primary"):
-                ss.phase = 5; st.rerun()
+                ss.phase = 5; autosave(); st.rerun()
         else:
             st.caption(f"Diagnose {goal - done} more week(s) to finish "
                        "(adjust the goal in the sidebar).")
@@ -1754,10 +1859,16 @@ def main():
             st.caption("This code encodes your name, weeks played, and score with a checksum "
                        "your instructor can verify — it can't be guessed or reused by someone "
                        "else. Copy it into the LMS submission box.")
+            if store.enabled() and SID and not ss.get("_completion_recorded"):
+                try:
+                    store.record_completion(GAME, SID, completion_code=code, score=ss.score)
+                    ss["_completion_recorded"] = True
+                except Exception:
+                    pass
 
         c1, c2 = st.columns(2)
         if c1.button("▶️ Diagnose more weeks"):
-            ss.phase = 4; new_us_round(); st.rerun()
+            ss.phase = 4; new_us_round(); autosave(); st.rerun()
         if c2.button("↺ Restart game"):
             st.session_state.clear(); st.rerun()
 
