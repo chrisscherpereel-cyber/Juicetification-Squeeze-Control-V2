@@ -646,25 +646,6 @@ def pnl_cards(shipped_bad, stopped_good):
         unsafe_allow_html=True)
 
 
-def consequence_cards(shipped_bad, stopped_good, cap=8):
-    """Readable HTML stat-cards for the two error tallies."""
-    def card(emoji, label, value, color):
-        pct = min(value / cap, 1.0) * 100 if cap else 0
-        return (
-            f'<div style="background:#f8fafc;border:1px solid #e5e9f0;border-radius:12px;'
-            f'padding:11px 13px;margin-bottom:9px">'
-            f'<div style="display:flex;justify-content:space-between;align-items:baseline">'
-            f'<span style="font-size:.8rem;color:#5b6472">{emoji} {label}</span>'
-            f'<span style="font-size:1.5rem;font-weight:800;color:{color}">{value}</span></div>'
-            f'<div style="height:9px;background:#e9edf3;border-radius:6px;margin-top:7px;overflow:hidden">'
-            f'<div style="height:100%;width:{pct:.0f}%;background:{color};border-radius:6px"></div></div>'
-            f'</div>')
-    st.markdown(
-        card("🧴", "Bad juice shipped", shipped_bad, "#c0392b") +
-        card("🛑", "Needless line stops", stopped_good, "#e67e22"),
-        unsafe_allow_html=True)
-
-
 def bottle_svg(frac):
     frac = max(0.0, min(1.0, frac))
     bh, bt = 150, 45
@@ -680,24 +661,6 @@ def bottle_svg(frac):
       <rect x="30" y="{jy:.1f}" width="60" height="{jh:.1f}" fill="url(#j)" clip-path="url(#c)"/>
       <rect x="38" y="{bt+12}" width="8" height="{bh-24}" rx="4" fill="rgba(255,255,255,.35)"/></svg>
       <div style="color:#8a8f98;font-size:.85rem">filling sample bottles…</div></div>"""
-
-
-def inspection_grid_svg(n_show, n_bad, cols=15):
-    n_bad = int(max(0, min(n_show, n_bad)))
-    bad = set(int(v) for v in np.linspace(0, n_show - 1, n_bad)) if n_bad else set()
-    r, gap = 5, 3
-    step = 2 * r + gap
-    rows = -(-n_show // cols)
-    dots = []
-    for idx in range(n_show):
-        cx = (idx % cols) * step + r + 2
-        cy = (idx // cols) * step + r + 2
-        color = BAD_COLOR if idx in bad else GOOD_COLOR
-        dots.append(f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="{color}"/>')
-    w, h = cols * step + 4, rows * step + 4
-    return (f'<svg width="100%" viewBox="0 0 {w} {h}">{"".join(dots)}</svg>'
-            f'<div style="color:#8a8f98;font-size:.78rem;text-align:center">'
-            f'🟠 good · 🟢 defective (showing {n_show} of {P_INSPECT})</div>')
 
 
 def nk_diagram_svg(n=SUBGROUP_N, k=N_BASELINE, show_rows=4):
@@ -1028,6 +991,18 @@ def autosave():
             pass
 
 
+def restart_game():
+    """Fully restart. When signed in, also reset the *stored* progress, otherwise
+    restore_progress() would immediately reload the finished game after clear()."""
+    if store.enabled() and SID:
+        try:
+            store.save(GAME, SID, {})       # blank record → restore() finds nothing
+        except Exception:
+            pass
+    st.session_state.clear()
+    st.rerun()
+
+
 def restore_progress():
     """Copy saved progress back into session_state, once per session."""
     ss = st.session_state
@@ -1071,19 +1046,26 @@ def clean_baseline(sub_n, p_inspect, rng, tries=400):
 
 
 def scroll_top_on_change():
-    """Scroll back to the top when the screen meaningfully changes (new phase,
-    new week, reveal). Best-effort JS; harmless if it can't find the container."""
+    """Scroll back to the top once, whenever the screen meaningfully changes
+    (new phase, new week, reveal). The injected HTML embeds a monotonic nav
+    token so it's unique every navigation — this forces Streamlit to remount the
+    component iframe and re-run the scroll (identical HTML would be cached and
+    would NOT re-execute). Best-effort JS; harmless if the container isn't found."""
     ss = st.session_state
     marker = (ss.phase, ss.get("rounds_played"), ss.get("answered"),
               ss.get("reveal_pending"))
     if ss.get("_scroll_marker") == marker:
         return
     ss["_scroll_marker"] = marker
+    ss["_nav_token"] = ss.get("_nav_token", 0) + 1
+    token = ss["_nav_token"]
     components.html(
-        "<script>const d=window.parent.document;"
+        f"<script>/* nav {token} */"
+        "const d=window.parent.document;"
         "const el=d.querySelector('section.main')||d.querySelector('[data-testid=\"stMain\"]')"
         "||d.querySelector('.main')||d.scrollingElement||d.documentElement;"
-        "if(el){el.scrollTo({top:0,behavior:'instant'});}window.parent.scrollTo(0,0);</script>",
+        "if(el){el.scrollTo({top:0,behavior:'instant'});}"
+        "window.parent.scrollTo(0,0);</script>",
         height=0)
 
 
@@ -1221,7 +1203,7 @@ def main():
             st.caption("Cost of your calls (P&L)")
             pnl_cards(ss.shipped_bad, ss.stopped_good)
         if st.button("↺ Restart game"):
-            st.session_state.clear(); st.rerun()
+            restart_game()
 
     delay = SPEEDS[ss.speed_label]
 
@@ -1415,6 +1397,11 @@ def main():
         st.subheader("Act 2 · Blueprints — build your control charts")
         plant_banner("NL", "Rotterdam Bottling Plant",
                      "building charts from the Netherlands baseline data")
+        if ss.baseline is None or ss.p_baseline is None:
+            st.warning("There's no baseline yet — let's collect it in Act 1 first.")
+            if st.button("⬅️ Go to Act 1"):
+                ss.phase = 1; st.rerun()
+            st.stop()
         mentor_note("Here's the real skill: turning that baseline into limits. Do the math "
                     "yourself — pick the right chart, mind your sample sizes, and compute every "
                     "limit. You'll trust a chart you built.", **MARGIT)
@@ -1663,6 +1650,11 @@ def main():
         st.subheader("Act 3 · Route 66 — police the franchise")
         plant_banner("US", "Route 66 Bottling Plant",
                      "launching Route 66 Mango · 300 mL · same certified limits from Rotterdam")
+        if ss.limits is None or ss.p_limits is None or ss.us_sub is None:
+            st.warning("Your charts aren't certified yet — let's finish building them in Act 2.")
+            if st.button("⬅️ Go to Act 2"):
+                ss.phase = 3; st.rerun()
+            st.stop()
         if ss.rounds_played == 0:
             mentor_note("Rotterdam's certified — congratulations. We're opening a franchise on "
                         "Route 66 in the States, launching Mango. Same charts, new line. Go make "
@@ -1962,7 +1954,7 @@ def main():
         if c1.button("▶️ Diagnose more weeks"):
             ss.phase = 4; new_us_round(); autosave(); st.rerun()
         if c2.button("↺ Restart game"):
-            st.session_state.clear(); st.rerun()
+            restart_game()
 
 
 if __name__ == "__main__":
