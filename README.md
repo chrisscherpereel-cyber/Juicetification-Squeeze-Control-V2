@@ -64,7 +64,7 @@ The app can save each student's progress and give them a **stable, unique scenar
 When it *is* configured (see the secrets below):
 
 - Students are identified by `?sid=<student id>` (a one-field sign-in gate appears if it's missing). The scenario seed is derived deterministically from the student id, so the same student always gets the same baseline, limits, and first weeks.
-- Progress autosaves after each meaningful step (baseline collected, each phase, every weekly submission, finishing). A refresh restores where they left off — the `?sid=` in the URL makes this automatic.
+- Progress autosaves after each meaningful step (baseline collected, each phase, every weekly submission, finishing). **A student can stop anytime and pick up exactly where they left off — including the random-number sequence, so weeks generated after a resume continue as if uninterrupted — simply by signing in with the same student ID.** No "finish in one sitting" required.
 - On finish, a completion record (student, code, score) is written for the instructor roster.
 
 Required secrets (environment variables or `.streamlit/secrets.toml`): `DB_ENCRYPTION_KEY`, plus either `DROPBOX_REFRESH_TOKEN` + `DROPBOX_APP_KEY` + `DROPBOX_APP_SECRET`, or `DROPBOX_ACCESS_TOKEN`. Optional: `PROGRESS_ROOT`, `GAMES_ROOT`. With storage enabled you must install the `dropbox` and `cryptography` packages (already in `requirements.txt`).

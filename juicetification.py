@@ -29,6 +29,7 @@ import time
 import hashlib
 import numpy as np
 import streamlit as st
+import streamlit.components.v1 as components
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -202,20 +203,20 @@ def centerline_hint(name, v, xbb, rbar, pbar, p_inspect=P_INSPECT):
     tot = N_BASELINE * p_inspect
     if name == "X̄̄":
         if v > 305 or v < 295:
-            return "X̄̄ should land near the 300 mL target — average the **Mean X̄** column (sum of the means ÷ number of shifts)."
-        return "Almost — make sure you divided the sum of all the **Mean X̄** values by the number of shifts."
+            return f"X̄̄ should land near the 300 mL target — average the **Mean X̄** column (sum of the means ÷ {N_BASELINE} samples)."
+        return f"Almost — make sure you divided the sum of all the **Mean X̄** values by {N_BASELINE} (the number of samples)."
     if name == "R̄":
         if v <= 0:
             return "R̄ is the average of the **Range R** column — a small positive number, not zero."
         if v > 15:
-            return "That's too large — you may have summed the ranges. Divide the **Range R** total by the number of shifts."
-        return "Almost — average all the **Range R** values (sum ÷ number of shifts)."
+            return f"That's too large — you may have summed the ranges. Divide the **Range R** total by {N_BASELINE} (the number of samples)."
+        return f"Almost — average all the **Range R** values (sum ÷ {N_BASELINE} samples)."
     # p̄
     if v > 1:
         return f"That looks like a **count**, not a proportion. Divide total defects by total bottles inspected ({N_BASELINE} × {p_inspect} = {tot:,})."
     if v > 0.15:
-        return f"Too high for this defect rate — did you divide by the {N_BASELINE} shifts? Use total bottles inspected = {tot:,}."
-    return f"Almost — p̄ = total **Defects** ÷ {tot:,} (that's {N_BASELINE} shifts × {p_inspect} bottles)."
+        return f"Too high for this defect rate — did you divide by {N_BASELINE} (the number of samples)? Use total bottles inspected = {tot:,}."
+    return f"Almost — p̄ = total **Defects** ÷ {tot:,} (that's {N_BASELINE} samples × {p_inspect} bottles)."
 
 
 def limit_hint(name, v, c):
@@ -728,7 +729,7 @@ def nk_diagram_svg(n=SUBGROUP_N, k=N_BASELINE, show_rows=4):
     nbrace = (f'<path d="M{x0} {by} v-6 H{x0+grid_w} v6" fill="none" '
               f'stroke="#ff7a00" stroke-width="2"/>')
     nlabel = (f'<text x="{x0+grid_w/2}" y="{by-12}" font-size="15" font-weight="700" '
-              f'fill="#ff7a00" text-anchor="middle">n = {n}  (sample size — bottles per shift)</text>')
+              f'fill="#ff7a00" text-anchor="middle">n = {n}  (sample size — bottles in each sample)</text>')
     ellipsis = (f'<text x="{x0+grid_w/2}" y="{ell_y+14}" font-size="20" fill="#c9ced6" '
                 f'text-anchor="middle">⋮  (rows 5 … {k})</text>')
     h = ell_y + 30
@@ -797,7 +798,20 @@ def week_figure(means, ranges, fracs, lim, plim, upto, flags=None, reveal=False)
                            font=dict(size=11, color=color),
                            bgcolor="rgba(255,255,255,.8)", row=row, col=1)
 
-    # X-bar (row 1) — control limits + centerline as line traces (always render)
+    def zone(row, y0, y1):
+        """Shaded amber warning band (between 2σ and the control limit)."""
+        if y1 <= y0:
+            return
+        fig.add_trace(go.Scatter(x=[0, N + 1, N + 1, 0], y=[y0, y0, y1, y1],
+                                 fill="toself", fillcolor="rgba(255,170,0,.13)",
+                                 line=dict(width=0), mode="lines",
+                                 hoverinfo="skip", showlegend=False), row=row, col=1)
+
+    # X-bar (row 1) — 2σ warning zones, then limits + centerline as line traces
+    _sxu = (lim["ucl_x"] - lim["xbarbar"]) / 3.0
+    _sxd = (lim["xbarbar"] - lim["lcl_x"]) / 3.0
+    zone(1, lim["xbarbar"] + 2 * _sxu, lim["ucl_x"])
+    zone(1, lim["lcl_x"], lim["xbarbar"] - 2 * _sxd)
     for y, c, d, lbl in [(lim["ucl_x"], "#d33", "dash", f"UCL {lim['ucl_x']:.2f}"),
                          (lim["xbarbar"], "#2a2", "dot", f"CL {lim['xbarbar']:.2f}"),
                          (lim["lcl_x"], "#d33", "dash", f"LCL {lim['lcl_x']:.2f}")]:
@@ -809,6 +823,7 @@ def week_figure(means, ranges, fracs, lim, plim, upto, flags=None, reveal=False)
                              showlegend=False), row=1, col=1)
 
     # R (row 2)
+    zone(2, lim["rbar"] + 2 * (lim["ucl_r"] - lim["rbar"]) / 3.0, lim["ucl_r"])
     for y, c, d, lbl in [(lim["ucl_r"], "#d33", "dash", f"UCL {lim['ucl_r']:.2f}"),
                          (lim["rbar"], "#2a2", "dot", f"CL {lim['rbar']:.2f}"),
                          (lim["lcl_r"], "#d33", "dash", f"LCL {lim['lcl_r']:.2f}")]:
@@ -820,6 +835,7 @@ def week_figure(means, ranges, fracs, lim, plim, upto, flags=None, reveal=False)
                              showlegend=False), row=2, col=1)
 
     # p (row 3) — orange good / green defective; red ring on any flagged point
+    zone(3, plim["pbar"] + 2 * (plim["ucl"] - plim["pbar"]) / 3.0, plim["ucl"])
     for y, c, d, lbl in [(plim["ucl"], "#d33", "dash", f"UCL {plim['ucl']:.3f}"),
                          (plim["pbar"], "#888", "dot", f"p̄ {plim['pbar']:.3f}"),
                          (plim["lcl"], "#d33", "dash", f"LCL {plim['lcl']:.3f}")]:
@@ -992,9 +1008,15 @@ def _restore_value(k, v):
 
 
 def progress_snapshot():
-    """A plain-JSON snapshot of just the progress keys (no figures/RNG/widgets)."""
+    """A plain-JSON snapshot of the progress keys plus the RNG state, so a resumed
+    session continues exactly where it left off (no figures/widgets go in)."""
     ss = st.session_state
-    return {k: _json_safe(ss[k]) for k in PROGRESS_KEYS if k in ss}
+    snap = {k: _json_safe(ss[k]) for k in PROGRESS_KEYS if k in ss}
+    try:
+        snap["_rng_state"] = _json_safe(ss.rng.bit_generator.state)
+    except Exception:
+        pass
+    return snap
 
 
 def autosave():
@@ -1016,9 +1038,53 @@ def restore_progress():
         saved = store.load(GAME, SID)
     except Exception:
         saved = {}
+    if not saved:
+        return
     for k in PROGRESS_KEYS:
         if k in saved:
             ss[k] = _restore_value(k, saved[k])
+    if "_rng_state" in saved:                       # continue the exact RNG sequence
+        try:
+            ss.rng.bit_generator.state = saved["_rng_state"]
+        except Exception:
+            pass
+    ss["_resumed"] = ss.get("phase", 1) > 1 or ss.get("baseline") is not None
+
+
+def clean_baseline(sub_n, p_inspect, rng, tries=400):
+    """Generate an in-control baseline — no point beyond its own limits on any
+    chart — so the teaching baseline always *looks* in control. Deterministic
+    for a given seeded rng."""
+    sub = pc = None
+    for _ in range(tries):
+        sub = make_subgroups(N_BASELINE, n=sub_n, rng=rng)
+        pc = make_defects(N_BASELINE, P_BASELINE_RATE, rng, n_inspect=p_inspect)
+        lim = xbar_r_limits(sub)
+        plim = p_chart_limits(pc, n_inspect=p_inspect)
+        means, ranges = sub.mean(1), sub.max(1) - sub.min(1)
+        fracs = pc / p_inspect
+        if (means.max() <= lim["ucl_x"] and means.min() >= lim["lcl_x"]
+                and ranges.max() <= lim["ucl_r"] and ranges.min() >= lim["lcl_r"]
+                and fracs.max() <= plim["ucl"] and fracs.min() >= plim["lcl"]):
+            break
+    return sub, pc
+
+
+def scroll_top_on_change():
+    """Scroll back to the top when the screen meaningfully changes (new phase,
+    new week, reveal). Best-effort JS; harmless if it can't find the container."""
+    ss = st.session_state
+    marker = (ss.phase, ss.get("rounds_played"), ss.get("answered"),
+              ss.get("reveal_pending"))
+    if ss.get("_scroll_marker") == marker:
+        return
+    ss["_scroll_marker"] = marker
+    components.html(
+        "<script>const d=window.parent.document;"
+        "const el=d.querySelector('section.main')||d.querySelector('[data-testid=\"stMain\"]')"
+        "||d.querySelector('.main')||d.scrollingElement||d.documentElement;"
+        "if(el){el.scrollTo({top:0,behavior:'instant'});}window.parent.scrollTo(0,0);</script>",
+        height=0)
 
 
 def new_us_round():
@@ -1100,10 +1166,11 @@ def main():
     # Student sign-in gate — only when storage is configured (else behave as today).
     if store.enabled() and SID is None:
         st.markdown("## 🧃 Juicetification: Squeeze Control")
-        st.write("You'll get the same scenario every time you return, and your progress "
-                 "is saved automatically.")
-        entered = st.text_input("Enter your student ID to begin", key="_sid_entry")
-        if st.button("Start", type="primary"):
+        st.write("Your progress is **saved automatically** as you go. You can stop anytime and "
+                 "pick up right where you left off — just **sign in with the same student ID**.")
+        entered = st.text_input("Enter your student ID", key="_sid_entry",
+                                help="Use the exact same ID each time to resume your progress.")
+        if st.button("Start / Resume", type="primary"):
             if entered.strip():
                 store.set_student_id(entered.strip())
                 st.rerun()
@@ -1116,6 +1183,7 @@ def main():
     ss = st.session_state
 
     restore_progress()          # copy any saved progress back into session_state
+    scroll_top_on_change()      # jump to top when the phase / week / reveal changes
 
     # Persistent factory HUD — brand, running line, product SKU, lot, shift.
     if ss.phase == 4:
@@ -1132,7 +1200,12 @@ def main():
     st.caption("Juicetification: Squeeze Control — Statistical Process Control, "
                "one bottling line at a time.")
     if store.enabled() and SID:
-        st.caption(f"Signed in as {SID} · progress saved automatically")
+        if ss.get("_resumed"):
+            st.caption(f"Signed in as {SID} · welcome back — resumed where you left off · "
+                       "progress saved automatically")
+        else:
+            st.caption(f"Signed in as {SID} · progress saved automatically — "
+                       "sign in with the same ID to resume later")
 
     with st.sidebar:
         st.header("Career status")
@@ -1167,8 +1240,7 @@ def main():
         chart_ph, bottle_ph, grid_ph = cc.empty(), cs.empty(), cs.empty()
 
         if st.button(f"🏭 Run {N_BASELINE} production shifts & sample"):
-            ss.baseline = make_subgroups(N_BASELINE, n=ss.sub_n, rng=ss.rng)
-            ss.p_baseline = make_defects(N_BASELINE, P_BASELINE_RATE, ss.rng, n_inspect=ss.p_inspect)
+            ss.baseline, ss.p_baseline = clean_baseline(ss.sub_n, ss.p_inspect, ss.rng)
             animate_collection(chart_ph, bottle_ph, grid_ph, ss.baseline, ss.p_baseline,
                                delay, p_inspect=ss.p_inspect)
             autosave()
@@ -1268,9 +1340,11 @@ def main():
             leave = [TARGET_FILL + float(noise[j]) for j in range(m)]
 
             if ss.funnel_pending:
-                res, e = ss.funnel_you[-1], ss.funnel_last_e
+                res = ss.funnel_you[-1]
+                off = res - TARGET_FILL          # actual deviation of THIS filled shift
                 st.markdown(f'<div class="alertbox">Shift {ss.funnel_i} filled at '
-                            f'<b>{res:.1f} mL</b> — that is {e:+.1f} mL off the 300 mL target. '
+                            f'<b>{res:.1f} mL</b> — that is {off:+.1f} mL off the '
+                            f'{int(TARGET_FILL)} mL target. '
                             f'What do you do about the filler?</div>', unsafe_allow_html=True)
                 d1, d2 = st.columns(2)
                 if d1.button("🔧 Adjust the funnel toward target"):
@@ -1370,16 +1444,17 @@ def main():
         st.markdown(nk_diagram_svg(n, k), unsafe_allow_html=True)
         st.caption("You collected the same data two ways at once: **across** each shift "
                    "(bottles in one sample) and **down** the shifts (how many samples).")
-        n_opt, k_opt = f"{n} bottles per shift", f"{k} shifts"
+        n_opt, k_opt = f"{n} bottles in each sample", f"{k} samples (one per shift)"
         c1, c2 = st.columns(2)
         q_n = c1.radio("**Sample size (n)** for fill is…", [k_opt, n_opt], index=None, key="q_n")
         q_k = c2.radio("**Number of samples (k)** is…", [k_opt, n_opt], index=None, key="q_k")
         if not (q_n == n_opt and q_k == k_opt):
             if q_n is not None and q_k is not None:
-                st.error(f"Not quite. **n** counts the items *inside* one sample ({n} bottles). "
-                         f"**k** counts how many samples you took ({k} shifts).")
+                st.error(f"Not quite. **n** is the number of bottles *inside* one sample "
+                         f"({n} bottles). **k** is how many samples you took — one each shift, "
+                         f"so k = {k}.")
             st.stop()
-        st.success(f"Right. n = {n} (items per sample), k = {k} (samples taken).")
+        st.success(f"Right. n = {n} (bottles in each sample), k = {k} (samples taken, one per shift).")
 
         # ---- Step 2b: the DEFECT sample size is different ------------------
         st.markdown("#### Step 3 · The defect sample size is different")
@@ -1414,10 +1489,21 @@ def main():
         table["Mean X̄"] = [round(float(sub[i].mean()), 2) for i in range(N_BASELINE)]
         table["Range R"] = [round(float(sub[i].max() - sub[i].min()), 2) for i in range(N_BASELINE)]
         table["Defects"] = [int(pc[i]) for i in range(N_BASELINE)]
-        st.dataframe(table, use_container_width=True, hide_index=True, height=240)
-        st.caption(f"Totals: {N_BASELINE} shifts · {n} bottles/shift measured for fill "
-                   f"· {ss.p_inspect} bottles/shift inspected ({N_BASELINE*ss.p_inspect:,} inspected, "
-                   f"{int(pc.sum())} defective).")
+        st.dataframe(table, use_container_width=True, hide_index=True,
+                     height=min((N_BASELINE + 1) * 35 + 3, 900))
+        st.caption(f"Totals: {N_BASELINE} shifts · {n} bottles measured each shift for fill "
+                   f"· {ss.p_inspect} bottles inspected each shift "
+                   f"({N_BASELINE*ss.p_inspect:,} inspected, {int(pc.sum())} defective). "
+                   "Tip: hover the table and click the ⤓ icon to download it as a CSV with headers.")
+        st.markdown(
+            f"Work straight from the table above — each centerline is just an average:\n"
+            f"- **X̄̄ (grand mean)** — add up the **Mean X̄** column and divide by "
+            f"{N_BASELINE} (the number of samples).\n"
+            f"- **R̄ (mean range)** — add up the **Range R** column and divide by {N_BASELINE}.\n"
+            f"- **p̄ (mean fraction defective)** — add up **all** the **Defects**, then divide by "
+            f"the *total bottles inspected*: {N_BASELINE} samples × {ss.p_inspect} = "
+            f"**{N_BASELINE*ss.p_inspect:,}**. (Not by {N_BASELINE} — p̄ is a fraction of bottles, "
+            f"not an average of counts.)")
         z1, z2, z3 = st.columns(3)
         cl_x = z1.number_input("X̄̄ — grand mean (mL)", value=None, step=0.01, format="%.2f", key="cl_x")
         cl_r = z2.number_input("R̄ — mean range (mL)", value=None, step=0.01, format="%.2f", key="cl_r")
@@ -1444,7 +1530,7 @@ def main():
                                     step=1, format="%d", key="h_tot")
             dbad = []
             if vk is not None and int(vk) != N_BASELINE:
-                dbad.append("k should be the number of shifts")
+                dbad.append("k is the number of samples (one per shift)")
             if vtot is not None and int(vtot) != N_BASELINE * ss.p_inspect:
                 dbad.append("for p̄ the divisor is k × n_p (total bottles inspected), not k")
             if dbad:
@@ -1475,9 +1561,12 @@ def main():
         sd3 = s2.selectbox(f"D₃ for n = {n}", d3o, format_func=fmt, key="sel_d3")
         sd4 = s3.selectbox(f"D₄ for n = {n}", d4o, format_func=fmt, key="sel_d4")
         const_ok = (sa2 == kf["A2"] and sd3 == kf["D3"] and sd4 == kf["D4"])
+        n_const = sum([sa2 == kf["A2"], sd3 == kf["D3"], sd4 == kf["D4"]])
+        if any(v is not None for v in (sa2, sd3, sd4)):
+            st.caption(f"Correct so far: **{n_const} / 3** (all three come from the n = {n} row)")
         if not const_ok:
-            if any(v is not None for v in (sa2, sd3, sd4)):
-                st.warning(f"Not the n = {n} row yet — line each value up with n = {n}.")
+            if all(v is not None for v in (sa2, sd3, sd4)):
+                st.warning(f"Not all from the n = {n} row yet — recheck the ones still off.")
             st.stop()
         st.success(f"Correct — for n = {n}: A₂ = {kf['A2']}, D₃ = {kf['D3']}, D₄ = {kf['D4']}.")
 
@@ -1487,6 +1576,8 @@ def main():
                  % (lim["xbarbar"], lim["rbar"], plim["pbar"]))
         st.latex(r"A_2=%.3f,\ D_3=%.3f,\ D_4=%.3f\qquad n_p=%d"
                  % (kf["A2"], kf["D3"], kf["D4"], ss.p_inspect))
+        st.caption(f"Here **n_p** is the p-chart sample size — the {ss.p_inspect} bottles "
+                   "inspected each shift (the same symbol used in the p-limit formula below).")
         cX, cR, cP = st.columns(3)
         cX.markdown("**X̄ chart (mL)**")
         ax_u = cX.number_input("UCL X̄", value=None, step=0.01, format="%.2f", key="c_ux")
@@ -1608,7 +1699,8 @@ def main():
                 f"- **Beyond the limits** — a point past a red UCL/LCL line.\n"
                 f"- **Run** — {RUN_LEN}+ points in a row on one side of the centerline.\n"
                 f"- **Trend** — {TREND_LEN}+ points steadily rising or falling.\n"
-                f"- **Two near a limit** — 2 points in a row inside the shaded 2σ zone.")
+                f"- **Two near a limit** — 2 points in a row inside the **amber warning band** "
+                f"(between 2σ and a control limit).")
 
         chart_ph = st.empty()
 
