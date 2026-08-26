@@ -55,7 +55,7 @@ The app ships with a tiny, dependency-free config layer (`juice_director.py` + `
 - **Configure via a self-contained link:** `…/?cfg=<base64 JSON>`, e.g. base64 of `{"target_fill_ml":250,"cost_recall":50000}` sets the fill target and recall cost.
 - **Reproducible seed:** add `?seed=<int>`; optional `?sec=<section>` and `?game=<code>` are passed through as context.
 
-Configurable parameters (defaults in parentheses): fill target mL (300), within-subgroup σ (2.0), spec low/high (294 / 306), subgroup size *n* (5; one of 2–7), baseline subgroups (24), bottles inspected/shift (200), in-control fraction defective (0.04), $ per missed signal / Type II (12000), $ per false alarm / Type I (3500), trend length (5), and the completion-code secret (`squeeze-control-2026`). Out-of-range or invalid values fall back to the default. The control-chart constants (A₂, D₃, D₄, d₂) are **not** configurable — they're fixed statistical constants keyed by subgroup size.
+Configurable parameters (defaults in parentheses): fill target mL (300), within-subgroup σ (2.0), spec low/high (294 / 306), subgroup size *n* (5; one of 2–7), baseline subgroups (24), bottles inspected/shift (200), in-control fraction defective (0.04), $ per missed signal / Type II (12000), $ per false alarm / Type I (3500), trend length (5), **Act 3 weeks to diagnose (10) and the minimum weeks a student may set (5)**, and the completion-code secret (`squeeze-control-2026`). Out-of-range or invalid values fall back to the default. The control-chart constants (A₂, D₃, D₄, d₂) are **not** configurable — they're fixed statistical constants keyed by subgroup size.
 
 ## Student progress & persistence (optional)
 
@@ -64,7 +64,7 @@ The app can save each student's progress and give them a **stable, unique scenar
 When it *is* configured (see the secrets below):
 
 - Students are identified by `?sid=<student id>` (a one-field sign-in gate appears if it's missing). The scenario seed is derived deterministically from the student id, so the same student always gets the same baseline, limits, and first weeks.
-- Progress autosaves after each meaningful step (baseline collected, each phase, every weekly submission, finishing). **A student can stop anytime and pick up exactly where they left off — including the random-number sequence, so weeks generated after a resume continue as if uninterrupted — simply by signing in with the same student ID.** No "finish in one sitting" required.
+- Progress autosaves after each meaningful step (baseline collected, each phase, **each step within Act 2's calculations**, every weekly submission, finishing), and a sidebar **💾 Save progress** button lets a student checkpoint on demand. **A student can stop anytime and pick up exactly where they left off — including the exact Act 2 step and the random-number sequence, so weeks generated after a resume continue as if uninterrupted — simply by signing in with the same student ID.** No "finish in one sitting" required.
 - On finish, a completion record (student, code, score) is written for the instructor roster.
 
 Required secrets (environment variables or `.streamlit/secrets.toml`): `DB_ENCRYPTION_KEY`, plus either `DROPBOX_REFRESH_TOKEN` + `DROPBOX_APP_KEY` + `DROPBOX_APP_SECRET`, or `DROPBOX_ACCESS_TOKEN`. Optional: `PROGRESS_ROOT`, `GAMES_ROOT`. With storage enabled you must install the `dropbox` and `cryptography` packages (already in `requirements.txt`).
@@ -102,6 +102,8 @@ The simplest way to configure the app is via the **Director** URL parameters abo
 | `subgroup_n` | fill subgroup size *n* | `5` |
 | `n_baseline` | baseline subgroups collected | `24` |
 | `p_inspect` | bottles inspected per shift | `200` |
+| `target_weeks` | Act 3 weeks to diagnose (default) | `10` |
+| `min_weeks` | minimum weeks a student may select | `5` |
 | `randomize_sampling` | draw *n* & *nₚ* per student (overrides the two above) | `false` |
 | `p_baseline_rate` | in‑control fraction defective | `0.04` |
 | `cost_recall` / `cost_linestop` | $ per missed signal / false alarm | `12000` / `3500` |

@@ -61,6 +61,8 @@ N_BASELINE      = CFG["n_baseline"]        # baseline subgroups collected
 P_INSPECT       = CFG["p_inspect"]         # bottles inspected per shift (attributes)
 P_BASELINE_RATE = CFG["p_baseline_rate"]   # in-control fraction defective
 RANDOMIZE_SAMPLING = CFG["randomize_sampling"]   # if True, draw n & n_p per student
+TARGET_WEEKS_DEFAULT = CFG["target_weeks"]       # default weeks to diagnose
+MIN_WEEKS = max(1, CFG["min_weeks"])             # floor students can't go below
 
 COMPLETION_SALT = CFG["completion_salt"]   # instructors: set your own secret
 
@@ -407,7 +409,7 @@ def inject_theme():
           background:linear-gradient(90deg,#ff7a00,#ffcf4d,#ff7a00);background-size:200% auto;
           -webkit-background-clip:text;background-clip:text;color:transparent;
           animation:shimmer 4s linear infinite;margin-bottom:0}
-      .sub{color:#8a8f98;margin-top:-4px}
+      .sub{color:#6a7280;margin-top:-4px}
       .alertbox{background:#fdecea;border-left:6px solid #c0392b;padding:12px 16px;border-radius:10px;
                 color:#922b21;font-weight:700;animation:pulse 1.4s infinite,rise .4s ease}
       .okbox{background:#eafaf1;border-left:6px solid #27ae60;padding:12px 16px;border-radius:10px;
@@ -420,7 +422,7 @@ def inject_theme():
       .hud-name{font-weight:800;background:linear-gradient(90deg,#ff7a00,#ffcf4d,#ff7a00);
                 background-size:200% auto;-webkit-background-clip:text;background-clip:text;
                 color:transparent;animation:shimmer 4s linear infinite}
-      .hud-tag{font-size:.72rem;color:#8a8f98;font-weight:600}
+      .hud-tag{font-size:.72rem;color:#6a7280;font-weight:600}
       .hud-belt{flex:1;min-width:60px;overflow:hidden;height:30px;position:relative;
                 border-top:2px solid #dbe2ea;border-bottom:2px solid #dbe2ea;background:#f7f9fc}
       .hud-row{position:absolute;top:1px;left:0;display:flex;gap:20px;padding-left:20px;
@@ -429,6 +431,18 @@ def inject_theme():
       .chip{display:inline-flex;align-items:center;gap:5px;background:#eef2f7;border:1px solid #e0e6ee;
             border-radius:20px;padding:3px 10px;font-size:.76rem;color:#3a424e;white-space:nowrap}
       .chip i{width:9px;height:9px;border-radius:50%;display:inline-block}
+      /* Make click buttons obvious: accent border + tint, stronger on hover */
+      .stButton>button{border:2px solid #ff7a00 !important;background:#fff7ee !important;
+            color:#b45309 !important;font-weight:700 !important;border-radius:10px !important;
+            box-shadow:0 1px 2px rgba(20,30,50,.06)}
+      .stButton>button:hover{background:#ff7a00 !important;color:#fff !important;
+            border-color:#e86f00 !important}
+      .stButton>button[kind="primary"]{background:#ff7a00 !important;color:#fff !important;
+            border-color:#e86f00 !important}
+      .stButton>button[kind="primary"]:hover{background:#e86f00 !important}
+      /* Darken supplementary/caption text a touch for readability (light & dark) */
+      [data-testid="stCaptionContainer"], .stCaption, [data-testid="stCaptionContainer"] p{
+            color:#4a5361 !important}
     </style>""", unsafe_allow_html=True)
 
 
@@ -555,7 +569,7 @@ def inspection_scene_svg(n_inspected, n_defective):
             if n_def > rej_n else '')
     svg = (f'<svg width="100%" viewBox="0 0 420 164">{belt}{rollers}{goods}{inspector}'
            f'{chute}{binbox}{binlabel}{rejects}{more}</svg>')
-    cap = (f'<div style="color:#8a8f98;font-size:.78rem;text-align:center">Inspecting '
+    cap = (f'<div style="color:#6a7280;font-size:.78rem;text-align:center">Inspecting '
            f'{n_inspected} bottles/shift · {n_def} pulled off the line '
            f'(🟢 defective: underfill, crooked label, leaky cap)</div>')
     return svg + cap
@@ -635,7 +649,7 @@ def pnl_cards(shipped_bad, stopped_good):
                 f'padding:10px 12px;margin-bottom:8px">'
                 f'<div style="font-size:.78rem;color:#5b6472">{emoji} {label}</div>'
                 f'<div style="font-size:1.35rem;font-weight:800;color:{color}">${amount:,.0f}</div>'
-                f'<div style="font-size:.72rem;color:#8a8f98">{sub}</div></div>')
+                f'<div style="font-size:.72rem;color:#6a7280">{sub}</div></div>')
     st.markdown(
         card("🚨", "Recalls · shipped bad juice", recall,
              f"{shipped_bad} missed × ${COST_RECALL:,} (Type II)", "#c0392b")
@@ -660,7 +674,7 @@ def bottle_svg(frac):
       <clipPath id="c"><rect x="30" y="{bt}" width="60" height="{bh}" rx="16"/></clipPath>
       <rect x="30" y="{jy:.1f}" width="60" height="{jh:.1f}" fill="url(#j)" clip-path="url(#c)"/>
       <rect x="38" y="{bt+12}" width="8" height="{bh-24}" rx="4" fill="rgba(255,255,255,.35)"/></svg>
-      <div style="color:#8a8f98;font-size:.85rem">filling sample bottles…</div></div>"""
+      <div style="color:#6a7280;font-size:.85rem">filling sample bottles…</div></div>"""
 
 
 def nk_diagram_svg(n=SUBGROUP_N, k=N_BASELINE, show_rows=4):
@@ -915,7 +929,7 @@ def init_state():
              shipped_bad=0, stopped_good=0, speed_label="Normal",
              funnel_noise=None, funnel_i=0, funnel_setting=TARGET_FILL,
              funnel_you=[], funnel_adjusts=0, funnel_pending=False, funnel_last_e=0.0,
-             target_weeks=10, picks={"x": set(), "r": set(), "p": set()},
+             target_weeks=TARGET_WEEKS_DEFAULT, picks={"x": set(), "r": set(), "p": set()},
              total_signals=0, total_caught=0, total_false=0,
              week_missed=0, week_false=0,
              lot_base=int(lot_rng.integers(120, 880)),
@@ -936,6 +950,9 @@ PROGRESS_KEYS = [
     "funnel_pending", "funnel_last_e",
     "target_weeks", "picks", "total_signals", "total_caught", "total_false",
     "week_missed", "week_false", "lot_base", "sub_n", "p_inspect",
+    # Act 2 answer widgets — persisted so a resume restores the exact step reached
+    "sel_var", "sel_att", "q_n", "q_k", "q_np", "cl_x", "cl_r", "cl_p",
+    "sel_a2", "sel_d3", "sel_d4", "c_ux", "c_lx", "c_ur", "c_lr", "c_up", "c_lp",
 ]
 _ARRAY_KEYS = {"baseline", "p_baseline", "us_sub", "us_counts", "funnel_noise"}
 
@@ -1045,18 +1062,20 @@ def clean_baseline(sub_n, p_inspect, rng, tries=400):
     return sub, pc
 
 
-def scroll_top_on_change():
-    """Scroll back to the top once, whenever the screen meaningfully changes
-    (new phase, new week, reveal). The injected HTML embeds a monotonic nav
-    token so it's unique every navigation — this forces Streamlit to remount the
-    component iframe and re-run the scroll (identical HTML would be cached and
-    would NOT re-execute). Best-effort JS; harmless if the container isn't found."""
+def request_scroll():
+    """Ask for a scroll-to-top on the next render (call at genuine navigation)."""
+    st.session_state["_scroll_pending"] = True
+
+
+def render_scroll():
+    """Emit the scroll-to-top once, if requested. The HTML embeds a monotonic nav
+    token so it's unique every time — this forces Streamlit to remount the component
+    iframe and re-run the scroll (identical HTML would be cached and NOT re-execute).
+    Only fires on explicit navigation, never on submit / answer clicks."""
     ss = st.session_state
-    marker = (ss.phase, ss.get("rounds_played"), ss.get("answered"),
-              ss.get("reveal_pending"))
-    if ss.get("_scroll_marker") == marker:
+    if not ss.get("_scroll_pending"):
         return
-    ss["_scroll_marker"] = marker
+    ss["_scroll_pending"] = False
     ss["_nav_token"] = ss.get("_nav_token", 0) + 1
     token = ss["_nav_token"]
     components.html(
@@ -1119,6 +1138,7 @@ def new_us_round():
     ss.stream_done = False
     ss.reveal_pending = False
     ss.ocap_scored = False
+    request_scroll()            # new week → land at the top
 
 
 def us_detection():
@@ -1165,7 +1185,10 @@ def main():
     ss = st.session_state
 
     restore_progress()          # copy any saved progress back into session_state
-    scroll_top_on_change()      # jump to top when the phase / week / reveal changes
+    if not ss.get("_first_render"):
+        ss["_first_render"] = True
+        request_scroll()        # start (or resume) at the top
+    render_scroll()             # emit scroll-to-top only when navigation requested it
 
     # Persistent factory HUD — brand, running line, product SKU, lot, shift.
     if ss.phase == 4:
@@ -1197,11 +1220,17 @@ def main():
         ss.speed_label = st.select_slider("Simulation speed", options=list(SPEEDS.keys()),
                                           value=ss.speed_label)
         if ss.phase == 4:
-            ss.target_weeks = st.number_input("Weeks to diagnose", min_value=3, max_value=30,
-                                              value=ss.target_weeks, step=1,
-                                              help="How many weeks you'll diagnose before finishing")
+            ss.target_weeks = st.number_input("Weeks to diagnose", min_value=MIN_WEEKS,
+                                              max_value=30, value=max(ss.target_weeks, MIN_WEEKS),
+                                              step=1,
+                                              help=f"How many weeks you'll diagnose before "
+                                                   f"finishing (minimum {MIN_WEEKS})")
             st.caption("Cost of your calls (P&L)")
             pnl_cards(ss.shipped_bad, ss.stopped_good)
+        if store.enabled() and SID:
+            if st.button("💾 Save progress"):
+                autosave()
+                st.toast("Progress saved — sign in with the same ID to resume.")
         if st.button("↺ Restart game"):
             restart_game()
 
@@ -1245,7 +1274,7 @@ def main():
                         f'{means.mean():.2f} mL · avg defects/shift ≈ {ss.p_baseline.mean():.1f}</div>',
                         unsafe_allow_html=True)
             if st.button("➡️ Next: a quick experiment before we build charts"):
-                ss.phase = 2; autosave(); st.rerun()
+                ss.phase = 2; autosave(); request_scroll(); st.rerun()
 
     # ---------------------------------------------------- INTERLUDE · FUNNEL
     elif ss.phase == 2:
@@ -1390,7 +1419,7 @@ def main():
                             "really a signal — so you act on causes, not on noise. Let's build "
                             "those charts.", **MARGIT)
                 if st.button("➡️ Proceed to build the charts"):
-                    ss.phase = 3; autosave(); st.rerun()
+                    ss.phase = 3; autosave(); request_scroll(); st.rerun()
 
     # ------------------------------------------------------------------ ACT 2
     elif ss.phase == 3:
@@ -1400,7 +1429,7 @@ def main():
         if ss.baseline is None or ss.p_baseline is None:
             st.warning("There's no baseline yet — let's collect it in Act 1 first.")
             if st.button("⬅️ Go to Act 1"):
-                ss.phase = 1; st.rerun()
+                ss.phase = 1; request_scroll(); st.rerun()
             st.stop()
         mentor_note("Here's the real skill: turning that baseline into limits. Do the math "
                     "yourself — pick the right chart, mind your sample sizes, and compute every "
@@ -1440,6 +1469,7 @@ def main():
                 st.error(f"Not quite. **n** is the number of bottles *inside* one sample "
                          f"({n} bottles). **k** is how many samples you took — one each shift, "
                          f"so k = {k}.")
+            autosave()          # checkpoint Act 2 progress at this step
             st.stop()
         st.success(f"Right. n = {n} (bottles in each sample), k = {k} (samples taken, one per shift).")
 
@@ -1456,6 +1486,7 @@ def main():
             if q_np is not None:
                 st.error("Re-read the totals — the p-chart's sample size is the number of "
                          f"bottles **inspected** each shift, not the {n} measured for fill.")
+            autosave()          # checkpoint Act 2 progress at this step
             st.stop()
         st.success(f"Right — the p-chart sample size is n_p = {ss.p_inspect} bottles per shift.")
         st.info("**Why different?** Measuring exact fill volume is slow and costly, so you "
@@ -1495,11 +1526,14 @@ def main():
         cl_x = z1.number_input("X̄̄ — grand mean (mL)", value=None, step=0.01, format="%.2f", key="cl_x")
         cl_r = z2.number_input("R̄ — mean range (mL)", value=None, step=0.01, format="%.2f", key="cl_r")
         cl_p = z3.number_input("p̄ — mean fraction defective", value=None, step=0.001, format="%.3f", key="cl_p")
-        cl_fields = [("X̄̄", cl_x, lim["xbarbar"], 0.15),
-                     ("R̄", cl_r, lim["rbar"], 0.15),
-                     ("p̄", cl_p, plim["pbar"], 0.003)]
+        cl_fields = [("X̄̄", cl_x, lim["xbarbar"], 0.05),
+                     ("R̄", cl_r, lim["rbar"], 0.05),
+                     ("p̄", cl_p, plim["pbar"], 0.002)]
         cl_wrong = [(nm, v) for nm, v, t, tol in cl_fields if v is not None and abs(v - t) > tol]
         cl_ok = all(v is not None and abs(v - t) <= tol for _, v, t, tol in cl_fields)
+        if cl_ok:
+            st.success(f"Centerlines set — X̄̄ = {lim['xbarbar']:.2f} mL, R̄ = {lim['rbar']:.2f} mL, "
+                       f"p̄ = {plim['pbar']:.3f}.")
         for nm, v in cl_wrong:
             st.warning(f"**{nm}** isn't right yet — "
                        + centerline_hint(nm, v, lim["xbarbar"], lim["rbar"], plim["pbar"],
@@ -1525,14 +1559,13 @@ def main():
             elif vk is not None or vtot is not None:
                 st.success("Right divisors — now sum each column and divide.")
         if not cl_ok:
+            autosave()          # checkpoint Act 2 progress at this step
             st.stop()
-        st.success(f"Centerlines set — X̄̄ = {lim['xbarbar']:.2f} mL, R̄ = {lim['rbar']:.2f} mL, "
-                   f"p̄ = {plim['pbar']:.3f}.")
 
         # ---- Step 5: select the constants from the table ------------------
         st.markdown("#### Step 5 · Select the constants from the table")
         st.caption(f"The constants depend on the **sample size n** (of the fill data), not the "
-                   f"number of samples k — read the row for n = {n}.")
+                   f"number of samples k — **read the row for n = {n}.**")
         tbl = {"n": [], "A₂": [], "D₃": [], "D₄": []}
         for nn in sorted(SPC_CONSTANTS):
             kk = SPC_CONSTANTS[nn]
@@ -1554,6 +1587,7 @@ def main():
         if not const_ok:
             if all(v is not None for v in (sa2, sd3, sd4)):
                 st.warning(f"Not all from the n = {n} row yet — recheck the ones still off.")
+            autosave()          # checkpoint Act 2 progress at this step
             st.stop()
         st.success(f"Correct — for n = {n}: A₂ = {kf['A2']}, D₃ = {kf['D3']}, D₄ = {kf['D4']}.")
 
@@ -1576,9 +1610,9 @@ def main():
         ap_u = cP.number_input("UCL p", value=None, step=0.001, format="%.3f", key="c_up")
         ap_l = cP.number_input("LCL p", value=None, step=0.001, format="%.3f", key="c_lp")
 
-        fields = [("UCL X̄", ax_u, lim["ucl_x"], 0.3), ("LCL X̄", ax_l, lim["lcl_x"], 0.3),
-                  ("UCL R", ar_u, lim["ucl_r"], 0.3), ("LCL R", ar_l, lim["lcl_r"], 0.3),
-                  ("UCL p", ap_u, plim["ucl"], 0.004), ("LCL p", ap_l, plim["lcl"], 0.004)]
+        fields = [("UCL X̄", ax_u, lim["ucl_x"], 0.15), ("LCL X̄", ax_l, lim["lcl_x"], 0.15),
+                  ("UCL R", ar_u, lim["ucl_r"], 0.15), ("LCL R", ar_l, lim["lcl_r"], 0.08),
+                  ("UCL p", ap_u, plim["ucl"], 0.003), ("LCL p", ap_l, plim["lcl"], 0.003)]
         n_ok = sum(v is not None and abs(v - t) <= tol for _, v, t, tol in fields)
         wrong = [(nm, v) for nm, v, t, tol in fields if v is not None and abs(v - t) > tol]
         all_ok = n_ok == 6
@@ -1618,6 +1652,7 @@ def main():
                 st.success("Those variable values are correct — now plug them into the formulas "
                            "and compute each limit.")
         if not all_ok:
+            autosave()          # checkpoint Act 2 progress at this step
             st.stop()
         st.success("All six correct — you built every limit yourself. 🎉")
         with st.expander("See the worked calculation"):
@@ -1653,7 +1688,8 @@ def main():
         if ss.limits is None or ss.p_limits is None or ss.us_sub is None:
             st.warning("Your charts aren't certified yet — let's finish building them in Act 2.")
             if st.button("⬅️ Go to Act 2"):
-                ss.phase = 3; st.rerun()
+                ss.phase = 3; request_scroll(); st.rerun()
+            autosave()          # checkpoint Act 2 progress at this step
             st.stop()
         if ss.rounds_played == 0:
             mentor_note("Rotterdam's certified — congratulations. We're opening a franchise on "
@@ -1793,7 +1829,7 @@ def main():
                 if not t and not p:
                     cells.append('<span style="color:#1e8449">✓ correctly called in control</span>')
                 if not cells:
-                    cells.append('<span style="color:#8a8f98">—</span>')
+                    cells.append('<span style="color:#6a7280">—</span>')
                 rows += (f'<tr><td style="padding:4px 10px;font-weight:700;color:#1f2733">'
                          f'{names[c]}</td><td style="padding:4px 10px">'
                          + " · ".join(cells) + '</td></tr>')
@@ -1865,7 +1901,7 @@ def main():
         st.progress(min(done / goal, 1.0), text=f"Weeks diagnosed: {done} / {goal}")
         if done >= goal:
             if st.button("🏁 Finish & view your results", type="primary"):
-                ss.phase = 5; autosave(); st.rerun()
+                ss.phase = 5; autosave(); request_scroll(); st.rerun()
         else:
             st.caption(f"Diagnose {goal - done} more week(s) to finish "
                        "(adjust the goal in the sidebar).")

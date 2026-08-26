@@ -12,6 +12,8 @@ MANIFEST = {
     "n_baseline":      {"type":"int","default":24,"min":10,"max":60,"group":"Sampling","label":"Baseline subgroups"},
     "p_inspect":       {"type":"int","default":200,"min":50,"max":1000,"group":"Sampling","label":"Bottles inspected/shift"},
     "randomize_sampling": {"type":"bool","default":False,"group":"Sampling","label":"Randomize n & n_p per student (overrides the two above)"},
+    "target_weeks":    {"type":"int","default":10,"min":1,"max":52,"group":"Act 3","label":"Weeks to diagnose (default)"},
+    "min_weeks":       {"type":"int","default":5,"min":1,"max":52,"group":"Act 3","label":"Minimum weeks to diagnose"},
     "p_baseline_rate": {"type":"float","default":0.04,"min":0.0,"max":0.5,"group":"Quality","label":"In-control fraction defective"},
     "cost_recall":     {"type":"int","default":12000,"min":0,"group":"Economics","label":"$ per missed signal (Type II)"},
     "cost_linestop":   {"type":"int","default":3500,"min":0,"group":"Economics","label":"$ per false alarm (Type I)"},
