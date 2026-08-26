@@ -53,25 +53,41 @@ SPC_CONSTANTS = {
 }
 
 # --- Instructor-configurable values (Director; defaults if no config) --------
-TARGET_FILL     = CFG["target_fill_ml"]   # 300 mL default
-WITHIN_SIGMA    = CFG["within_sigma"]      # filler standard deviation (mL)
-SPEC_LOW, SPEC_HIGH = CFG["spec_low"], CFG["spec_high"]   # engineering spec
-SUBGROUP_N      = CFG["subgroup_n"]        # fill subgroup size n
-N_BASELINE      = CFG["n_baseline"]        # baseline subgroups collected
-P_INSPECT       = CFG["p_inspect"]         # bottles inspected per shift (attributes)
-P_BASELINE_RATE = CFG["p_baseline_rate"]   # in-control fraction defective
-RANDOMIZE_SAMPLING = CFG["randomize_sampling"]   # if True, draw n & n_p per student
-TARGET_WEEKS_DEFAULT = CFG["target_weeks"]       # default weeks to diagnose
-MIN_WEEKS = max(1, CFG["min_weeks"])             # floor students can't go below
+# Read via a fallback so a stale/out-of-sync manifest.py can never crash the app:
+# if a key is missing from the deployed manifest, the built-in default is used.
+_CFG_FALLBACK = {
+    "target_fill_ml": 300.0, "within_sigma": 2.0, "spec_low": 294.0, "spec_high": 306.0,
+    "subgroup_n": 5, "n_baseline": 24, "p_inspect": 200, "p_baseline_rate": 0.04,
+    "randomize_sampling": False, "target_weeks": 10, "min_weeks": 5,
+    "completion_salt": "squeeze-control-2026", "cost_recall": 12000,
+    "cost_linestop": 3500, "trend_len": 5,
+}
 
-COMPLETION_SALT = CFG["completion_salt"]   # instructors: set your own secret
+
+def cfg(key):
+    """Config value with a safe built-in fallback (robust to manifest version skew)."""
+    return CFG.get(key, _CFG_FALLBACK.get(key))
+
+
+TARGET_FILL     = cfg("target_fill_ml")   # 300 mL default
+WITHIN_SIGMA    = cfg("within_sigma")      # filler standard deviation (mL)
+SPEC_LOW, SPEC_HIGH = cfg("spec_low"), cfg("spec_high")   # engineering spec
+SUBGROUP_N      = cfg("subgroup_n")        # fill subgroup size n
+N_BASELINE      = cfg("n_baseline")        # baseline subgroups collected
+P_INSPECT       = cfg("p_inspect")         # bottles inspected per shift (attributes)
+P_BASELINE_RATE = cfg("p_baseline_rate")   # in-control fraction defective
+RANDOMIZE_SAMPLING = cfg("randomize_sampling")   # if True, draw n & n_p per student
+TARGET_WEEKS_DEFAULT = cfg("target_weeks")       # default weeks to diagnose
+MIN_WEEKS = max(1, cfg("min_weeks"))             # floor students can't go below
+
+COMPLETION_SALT = cfg("completion_salt")   # instructors: set your own secret
 
 # --- Plant economics: what each kind of error costs the business -------------
-COST_RECALL   = CFG["cost_recall"]     # $ per missed signal (Type II)
-COST_LINESTOP = CFG["cost_linestop"]   # $ per false alarm (Type I)
+COST_RECALL   = cfg("cost_recall")     # $ per missed signal (Type II)
+COST_LINESTOP = cfg("cost_linestop")   # $ per false alarm (Type I)
 
 RUN_LEN   = 5                 # run   = this many in a row on one side of centerline
-TREND_LEN = CFG["trend_len"]  # trend = this many in a row steadily rising/falling
+TREND_LEN = cfg("trend_len")  # trend = this many in a row steadily rising/falling
 
 # Director seed: when provided, the whole session is reproducible; else random.
 SEED = CTX["seed"]
