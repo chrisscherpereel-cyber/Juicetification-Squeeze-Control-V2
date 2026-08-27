@@ -26,8 +26,10 @@ Teaches Statistical Process Control with a juice-bottling story.
 """
 
 import time
+import io
 import hashlib
 import numpy as np
+import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as components
 import plotly.graph_objects as go
@@ -1078,6 +1080,26 @@ def clean_baseline(sub_n, p_inspect, rng, tries=400):
     return sub, pc
 
 
+def data_download_buttons(df, stem, key_prefix, label="this data"):
+    """Render CSV + Excel download buttons for an analyzable table."""
+    c1, c2 = st.columns(2)
+    csv = df.to_csv(index=False).encode("utf-8-sig")   # BOM so Excel keeps headers/units
+    c1.download_button(f"⬇️ Download {label} (CSV)", csv, file_name=f"{stem}.csv",
+                       mime="text/csv", key=f"{key_prefix}_csv", use_container_width=True)
+    try:
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as xl:
+            df.to_excel(xl, index=False, sheet_name="Data")
+        c2.download_button(f"⬇️ Download {label} (Excel)", buf.getvalue(),
+                           file_name=f"{stem}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument."
+                                "spreadsheetml.sheet",
+                           key=f"{key_prefix}_xlsx", use_container_width=True)
+    except Exception:
+        c2.caption("Excel export needs the openpyxl package (see requirements.txt); "
+                   "the CSV works everywhere.")
+
+
 def request_scroll():
     """Ask for a scroll-to-top on the next render (call at genuine navigation)."""
     st.session_state["_scroll_pending"] = True
@@ -1527,8 +1549,17 @@ def main():
                      height=min((N_BASELINE + 1) * 35 + 3, 900))
         st.caption(f"Totals: {N_BASELINE} shifts · {n} bottles measured each shift for fill "
                    f"· {ss.p_inspect} bottles inspected each shift "
-                   f"({N_BASELINE*ss.p_inspect:,} inspected, {int(pc.sum())} defective). "
-                   "Tip: hover the table and click the ⤓ icon to download it as a CSV with headers.")
+                   f"({N_BASELINE*ss.p_inspect:,} inspected, {int(pc.sum())} defective).")
+        # Downloadable copy of the exact data behind the control limits (clean headers).
+        dl = {"Shift": list(range(1, N_BASELINE + 1))}
+        for b in range(n):
+            dl[f"Bottle_{b+1}_mL"] = [round(float(sub[i, b]), 1) for i in range(N_BASELINE)]
+        dl["Mean_Xbar_mL"] = table["Mean X̄"]
+        dl["Range_R_mL"] = table["Range R"]
+        dl["Defects"] = table["Defects"]
+        dl["Inspected"] = [ss.p_inspect] * N_BASELINE
+        data_download_buttons(pd.DataFrame(dl), "juicetification_baseline_data",
+                              "bl", label="baseline data")
         st.markdown(
             f"Work straight from the table above — each centerline is just an average:\n"
             f"- **X̄̄ (grand mean)** — add up the **Mean X̄** column and divide by "
@@ -1745,6 +1776,20 @@ def main():
                 f"- **Trend** — {TREND_LEN}+ points steadily rising or falling.\n"
                 f"- **Two near a limit** — 2 points in a row inside the **amber warning band** "
                 f"(between 2σ and a control limit).")
+
+        with st.expander("⬇️ Download this week's data (CSV / Excel)"):
+            wk_no = ss.rounds_played + 1
+            wsub, wc = ss.us_sub, ss.us_counts
+            wdl = {"Shift": list(range(1, len(wsub) + 1))}
+            for b in range(ss.sub_n):
+                wdl[f"Bottle_{b+1}_mL"] = [round(float(wsub[i, b]), 1) for i in range(len(wsub))]
+            wdl["Mean_Xbar_mL"] = [round(float(wsub[i].mean()), 2) for i in range(len(wsub))]
+            wdl["Range_R_mL"] = [round(float(wsub[i].max() - wsub[i].min()), 2)
+                                 for i in range(len(wsub))]
+            wdl["Defects"] = [int(wc[i]) for i in range(len(wsub))]
+            wdl["Inspected"] = [ss.p_inspect] * len(wsub)
+            data_download_buttons(pd.DataFrame(wdl), f"juicetification_week_{wk_no:02d}_data",
+                                  "wk", label=f"week {wk_no} data")
 
         chart_ph = st.empty()
 
