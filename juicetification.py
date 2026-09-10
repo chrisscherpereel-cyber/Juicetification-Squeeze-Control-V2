@@ -461,6 +461,13 @@ def inject_theme():
       /* Darken supplementary/caption text a touch for readability (light & dark) */
       [data-testid="stCaptionContainer"], .stCaption, [data-testid="stCaptionContainer"] p{
             color:#4a5361 !important}
+      /* Calm, neutral default for number/text inputs so an empty box isn't alarming red.
+         Correctness colouring (green / red-blinking) is applied per-field where relevant. */
+      @keyframes fieldblink{0%,100%{border-color:#dc2626}50%{border-color:#fca5a5}}
+      [data-testid="stNumberInput"] [data-baseweb="input"],
+      [data-testid="stTextInput"] [data-baseweb="input"]{border:1px solid #cbd5e1 !important}
+      [data-testid="stNumberInput"] [data-baseweb="input"]:focus-within,
+      [data-testid="stTextInput"] [data-baseweb="input"]:focus-within{border-color:#94a3b8 !important}
     </style>""", unsafe_allow_html=True)
 
 
@@ -738,13 +745,16 @@ def nk_diagram_svg(n=SUBGROUP_N, k=N_BASELINE, show_rows=4):
 # -----------------------------------------------------------------------------
 def single_chart(values, center, ucl, lcl, title, yaxis, sigma=None,
                  flagged=None, marker=NAVY):
-    """A standalone control chart (used for the Act-2 baseline views)."""
+    """A standalone control chart (used for the Act-2 baseline views).
+    Always shades the 2σ–3σ warning zone (amber) on each side that has room."""
     flagged = flagged or set()
     x = list(range(1, len(values) + 1))
     fig = go.Figure()
-    if sigma:
-        fig.add_hrect(y0=center + 2 * sigma, y1=ucl, line_width=0, fillcolor="rgba(255,170,0,.10)")
-        fig.add_hrect(y0=center - 2 * sigma, y1=lcl, line_width=0, fillcolor="rgba(255,170,0,.10)")
+    sig_up = (ucl - center) / 3.0          # zones are asymmetric on an R-chart
+    sig_dn = (center - lcl) / 3.0
+    fig.add_hrect(y0=center + 2 * sig_up, y1=ucl, line_width=0, fillcolor="rgba(255,170,0,.16)")
+    if center - 2 * sig_dn > lcl:
+        fig.add_hrect(y0=lcl, y1=center - 2 * sig_dn, line_width=0, fillcolor="rgba(255,170,0,.16)")
     fig.add_hline(y=ucl, line=dict(color="#d33", dash="dash"), annotation_text="UCL")
     fig.add_hline(y=lcl, line=dict(color="#d33", dash="dash"), annotation_text="LCL")
     fig.add_hline(y=center, line=dict(color="#2a2", dash="dot"), annotation_text="CL")
@@ -762,6 +772,12 @@ def p_chart_fig(counts, pbar, ucl, lcl, n_inspect=P_INSPECT, neutral=False,
     x = list(range(1, len(p) + 1))
     colors = [GOOD_COLOR if neutral or not (v > ucl or v < lcl) else BAD_COLOR for v in p]
     fig = go.Figure()
+    sig_up = (ucl - pbar) / 3.0            # amber warning zone, matching the other charts
+    fig.add_hrect(y0=pbar + 2 * sig_up, y1=ucl, line_width=0, fillcolor="rgba(255,170,0,.16)")
+    if lcl > 0:
+        sig_dn = (pbar - lcl) / 3.0
+        if pbar - 2 * sig_dn > lcl:
+            fig.add_hrect(y0=lcl, y1=pbar - 2 * sig_dn, line_width=0, fillcolor="rgba(255,170,0,.16)")
     fig.add_hline(y=ucl, line=dict(color="#d33", dash="dash"), annotation_text="UCL")
     fig.add_hline(y=pbar, line=dict(color="#888", dash="dot"), annotation_text="p̄")
     if lcl > 0:
@@ -1100,6 +1116,33 @@ def data_download_buttons(df, stem, key_prefix, label="this data"):
                    "the CSV works everywhere.")
 
 
+def _fstate(value, target, tol):
+    """Per-field correctness: True (correct), False (entered but wrong), None (empty)."""
+    if value is None:
+        return None
+    return bool(abs(value - target) <= tol)
+
+
+def field_border_css(states):
+    """Colour each widget's box by correctness: green when correct, red (blinking)
+    when a value is entered but wrong, neutral when empty. Keyed on Streamlit's
+    per-widget `.st-key-<key>` container class."""
+    parts = []
+    for key, ok in states.items():
+        if ok is None:
+            continue
+        sel = (f'.st-key-{key} [data-baseweb="input"], .st-key-{key} [data-baseweb="base-input"], '
+               f'.st-key-{key} [data-baseweb="select"]>div:first-child')
+        if ok:
+            parts.append(sel + "{border:2px solid #16a34a !important;"
+                                "box-shadow:0 0 0 1px #16a34a inset !important}")
+        else:
+            parts.append(sel + "{border:2px solid #dc2626 !important;"
+                                "animation:fieldblink 1s ease-in-out infinite}")
+    if parts:
+        st.markdown("<style>" + "".join(parts) + "</style>", unsafe_allow_html=True)
+
+
 def request_scroll():
     """Ask for a scroll-to-top on the next render (call at genuine navigation)."""
     st.session_state["_scroll_pending"] = True
@@ -1308,6 +1351,18 @@ def main():
             bottle_ph.markdown(bottle_svg(1.0), unsafe_allow_html=True)
             grid_ph.markdown(inspection_scene_svg(ss.p_inspect, int(ss.p_baseline[-1])),
                              unsafe_allow_html=True)
+            # Defects across time — the attributes counterpart to the fill chart above.
+            dfig = go.Figure()
+            dfig.add_trace(go.Bar(x=list(range(1, N_BASELINE + 1)), y=ss.p_baseline,
+                                  marker_color=GOOD_COLOR,
+                                  hovertemplate="Shift %{x}: %{y} defective<extra></extra>"))
+            dfig.add_hline(y=float(ss.p_baseline.mean()), line=dict(color="#888", dash="dot"),
+                           annotation_text="avg")
+            dfig.update_layout(height=280, showlegend=False,
+                               title="Defects per shift (baseline)", xaxis_title="Shift",
+                               yaxis_title=f"Defective bottles (of {ss.p_inspect})",
+                               margin=dict(l=10, r=10, t=40, b=10))
+            st.plotly_chart(dfig, use_container_width=True, key="a1_defects")
             st.markdown(f'<div class="okbox">✅ Collected {N_BASELINE} subgroups · grand mean ≈ '
                         f'{means.mean():.2f} mL · avg defects/shift ≈ {ss.p_baseline.mean():.1f}</div>',
                         unsafe_allow_html=True)
@@ -1536,39 +1591,41 @@ def main():
 
         # ---- Step 4: centerlines FROM the Netherlands data ----------------
         st.markdown("#### Step 4 · Calculate the centerlines from the data")
-        st.caption(f"These {N_BASELINE} shifts set every centerline: X̄̄ is the mean of the shift "
-                   "means, R̄ the mean of the ranges, p̄ the total defects over all bottles inspected.")
+        st.caption(f"Below is the **raw fill data** — {n} individual bottle volumes per shift plus "
+                   "the defect count. You'll compute the per-shift means and ranges yourself, then "
+                   "average them.")
         sub, pc = ss.baseline, ss.p_baseline
         table = {"Shift": list(range(1, N_BASELINE + 1))}
         for b in range(n):
             table[f"Bottle {b+1}"] = [round(float(sub[i, b]), 1) for i in range(N_BASELINE)]
-        table["Mean X̄"] = [round(float(sub[i].mean()), 2) for i in range(N_BASELINE)]
-        table["Range R"] = [round(float(sub[i].max() - sub[i].min()), 2) for i in range(N_BASELINE)]
         table["Defects"] = [int(pc[i]) for i in range(N_BASELINE)]
         st.dataframe(table, use_container_width=True, hide_index=True,
                      height=min((N_BASELINE + 1) * 35 + 3, 900))
         st.caption(f"Totals: {N_BASELINE} shifts · {n} bottles measured each shift for fill "
                    f"· {ss.p_inspect} bottles inspected each shift "
                    f"({N_BASELINE*ss.p_inspect:,} inspected, {int(pc.sum())} defective).")
-        # Downloadable copy of the exact data behind the control limits (clean headers).
+        # Downloadable RAW data (no pre-computed averages — students calculate those).
         dl = {"Shift": list(range(1, N_BASELINE + 1))}
         for b in range(n):
             dl[f"Bottle_{b+1}_mL"] = [round(float(sub[i, b]), 1) for i in range(N_BASELINE)]
-        dl["Mean_Xbar_mL"] = table["Mean X̄"]
-        dl["Range_R_mL"] = table["Range R"]
         dl["Defects"] = table["Defects"]
         dl["Inspected"] = [ss.p_inspect] * N_BASELINE
-        data_download_buttons(pd.DataFrame(dl), "juicetification_baseline_data",
-                              "bl", label="baseline data")
+        data_download_buttons(pd.DataFrame(dl), "juicetification_baseline_raw_data",
+                              "bl", label="raw baseline data")
         st.markdown(
-            f"Work straight from the table above — each centerline is just an average:\n"
-            f"- **X̄̄ (grand mean)** — add up the **Mean X̄** column and divide by "
-            f"{N_BASELINE} (the number of samples).\n"
-            f"- **R̄ (mean range)** — add up the **Range R** column and divide by {N_BASELINE}.\n"
-            f"- **p̄ (mean fraction defective)** — add up **all** the **Defects**, then divide by "
-            f"the *total bottles inspected*: {N_BASELINE} samples × {ss.p_inspect} = "
-            f"**{N_BASELINE*ss.p_inspect:,}**. (Not by {N_BASELINE} — p̄ is a fraction of bottles, "
+            f"**Do the math from the raw bottle volumes** (a spreadsheet makes this quick):\n"
+            f"1. For **each shift**, find its mean X̄ᵢ and its range Rᵢ = max − min of that shift's "
+            f"{n} bottles.\n"
+            f"2. **X̄̄ (grand mean)** = average of the {N_BASELINE} shift means "
+            f"(sum of the X̄ᵢ ÷ {N_BASELINE}).\n"
+            f"3. **R̄ (mean range)** = average of the {N_BASELINE} shift ranges "
+            f"(sum of the Rᵢ ÷ {N_BASELINE}).\n"
+            f"4. **p̄ (mean fraction defective)** = add up **all** the **Defects**, then divide by "
+            f"the *total bottles inspected*: {N_BASELINE} × {ss.p_inspect} = "
+            f"**{N_BASELINE*ss.p_inspect:,}**. (Not ÷ {N_BASELINE} — p̄ is a fraction of bottles, "
             f"not an average of counts.)")
+        st.caption("Type each value below and press **Enter** to record it. A box turns "
+                   "**green** the moment its value is correct, and **red** if it needs another look.")
         z1, z2, z3 = st.columns(3)
         cl_x = z1.number_input("X̄̄ — grand mean (mL)", value=None, step=0.01, format="%.2f", key="cl_x")
         cl_r = z2.number_input("R̄ — mean range (mL)", value=None, step=0.01, format="%.2f", key="cl_r")
@@ -1576,6 +1633,9 @@ def main():
         cl_fields = [("X̄̄", cl_x, lim["xbarbar"], 0.05),
                      ("R̄", cl_r, lim["rbar"], 0.05),
                      ("p̄", cl_p, plim["pbar"], 0.002)]
+        field_border_css({"cl_x": _fstate(cl_x, lim["xbarbar"], 0.05),
+                          "cl_r": _fstate(cl_r, lim["rbar"], 0.05),
+                          "cl_p": _fstate(cl_p, plim["pbar"], 0.002)})
         cl_wrong = [(nm, v) for nm, v, t, tol in cl_fields if v is not None and abs(v - t) > tol]
         cl_ok = all(v is not None and abs(v - t) <= tol for _, v, t, tol in cl_fields)
         if cl_ok:
@@ -1629,8 +1689,14 @@ def main():
         sd4 = s3.selectbox(f"D₄ for n = {n}", d4o, format_func=fmt, key="sel_d4")
         const_ok = (sa2 == kf["A2"] and sd3 == kf["D3"] and sd4 == kf["D4"])
         n_const = sum([sa2 == kf["A2"], sd3 == kf["D3"], sd4 == kf["D4"]])
+        field_border_css({
+            "sel_a2": (None if sa2 is None else sa2 == kf["A2"]),
+            "sel_d3": (None if sd3 is None else sd3 == kf["D3"]),
+            "sel_d4": (None if sd4 is None else sd4 == kf["D4"]),
+        })
         if any(v is not None for v in (sa2, sd3, sd4)):
-            st.caption(f"Correct so far: **{n_const} / 3** (all three come from the n = {n} row)")
+            st.caption(f"Correct so far: **{n_const} / 3** — each box turns green when it matches "
+                       f"the n = {n} row.")
         if not const_ok:
             if all(v is not None for v in (sa2, sd3, sd4)):
                 st.warning(f"Not all from the n = {n} row yet — recheck the ones still off.")
@@ -1663,7 +1729,12 @@ def main():
         n_ok = sum(v is not None and abs(v - t) <= tol for _, v, t, tol in fields)
         wrong = [(nm, v) for nm, v, t, tol in fields if v is not None and abs(v - t) > tol]
         all_ok = n_ok == 6
-        st.caption(f"Correct so far: **{n_ok} / 6**")
+        field_border_css({
+            "c_ux": _fstate(ax_u, lim["ucl_x"], 0.15), "c_lx": _fstate(ax_l, lim["lcl_x"], 0.15),
+            "c_ur": _fstate(ar_u, lim["ucl_r"], 0.15), "c_lr": _fstate(ar_l, lim["lcl_r"], 0.08),
+            "c_up": _fstate(ap_u, plim["ucl"], 0.003), "c_lp": _fstate(ap_l, plim["lcl"], 0.003),
+        })
+        st.caption(f"Correct so far: **{n_ok} / 6** — each box turns green as its value becomes correct.")
         ctx = dict(xbb=lim["xbarbar"], rbar=lim["rbar"], pbar=plim["pbar"],
                    a2=kf["A2"], d3=kf["D3"], d4=kf["D4"], ucl_x=lim["ucl_x"], lcl_x=lim["lcl_x"],
                    ucl_r=lim["ucl_r"], lcl_r=lim["lcl_r"], ucl_p=plim["ucl"], lcl_p=plim["lcl"],
@@ -1723,6 +1794,9 @@ def main():
         st.plotly_chart(p_chart_fig(ss.p_baseline, plim["pbar"], plim["ucl"], plim["lcl"],
                         n_inspect=ss.p_inspect, neutral=True, title="p-chart (baseline)"),
                         use_container_width=True, key="a2_p")
+        st.caption("🟠 The **amber band** on each chart is the *warning zone* — the outer third "
+                   "between 2σ and the 3σ control limit. A single point there is normal, but "
+                   "**two points in a row** in the band is a signal the process is drifting.")
         if st.button("✅ Certify charts & open the US franchise"):
             ss.limits, ss.p_limits, ss.phase = lim, plim, 4
             new_us_round(); autosave(); st.rerun()
