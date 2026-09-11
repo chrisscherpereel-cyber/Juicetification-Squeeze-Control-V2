@@ -462,8 +462,7 @@ def inject_theme():
       [data-testid="stCaptionContainer"], .stCaption, [data-testid="stCaptionContainer"] p{
             color:#4a5361 !important}
       /* Calm, neutral default for number/text inputs so an empty box isn't alarming red.
-         Correctness colouring (green / red-blinking) is applied per-field where relevant. */
-      @keyframes fieldblink{0%,100%{border-color:#dc2626}50%{border-color:#fca5a5}}
+         Correctness colouring (green / steady red) is applied per-field where relevant. */
       [data-testid="stNumberInput"] [data-baseweb="input"],
       [data-testid="stTextInput"] [data-baseweb="input"]{border:1px solid #cbd5e1 !important}
       [data-testid="stNumberInput"] [data-baseweb="input"]:focus-within,
@@ -1124,23 +1123,32 @@ def _fstate(value, target, tol):
 
 
 def field_border_css(states):
-    """Colour each widget's box by correctness: green when correct, red (blinking)
-    when a value is entered but wrong, neutral when empty. Keyed on Streamlit's
-    per-widget `.st-key-<key>` container class."""
+    """Colour each widget's box by correctness: green when correct, steady red when
+    a value is entered but wrong (stays red until corrected), neutral when empty.
+    Keyed on Streamlit's per-widget `.st-key-<key>` container class."""
     parts = []
     for key, ok in states.items():
         if ok is None:
             continue
         sel = (f'.st-key-{key} [data-baseweb="input"], .st-key-{key} [data-baseweb="base-input"], '
                f'.st-key-{key} [data-baseweb="select"]>div:first-child')
-        if ok:
-            parts.append(sel + "{border:2px solid #16a34a !important;"
-                                "box-shadow:0 0 0 1px #16a34a inset !important}")
-        else:
-            parts.append(sel + "{border:2px solid #dc2626 !important;"
-                                "animation:fieldblink 1s ease-in-out infinite}")
+        color = "#16a34a" if ok else "#dc2626"
+        parts.append(sel + f"{{border:2px solid {color} !important;"
+                           f"box-shadow:0 0 0 3px {color}33 !important;border-radius:8px !important}}")
     if parts:
         st.markdown("<style>" + "".join(parts) + "</style>", unsafe_allow_html=True)
+
+
+def field_status(items):
+    """A compact, always-visible per-field status line (works on any Streamlit
+    version): 🟢 correct · 🔴 recheck · ⚪ not entered."""
+    def dot(ok):
+        return "🟢" if ok is True else ("⚪" if ok is None else "🔴")
+    body = " &nbsp;·&nbsp; ".join(
+        f'<span style="color:{("#16a34a" if ok is True else ("#8a94a3" if ok is None else "#dc2626"))};'
+        f'font-weight:700">{dot(ok)} {label}</span>' for label, ok in items)
+    st.markdown(f'<div style="font-size:.86rem;margin:2px 0 6px">{body}</div>',
+                unsafe_allow_html=True)
 
 
 def request_scroll():
@@ -1625,7 +1633,8 @@ def main():
             f"**{N_BASELINE*ss.p_inspect:,}**. (Not ÷ {N_BASELINE} — p̄ is a fraction of bottles, "
             f"not an average of counts.)")
         st.caption("Type each value below and press **Enter** to record it. A box turns "
-                   "**green** the moment its value is correct, and **red** if it needs another look.")
+                   "**green** the moment its value is correct, and **stays red** until it is. "
+                   "The 🟢 / 🔴 markers under the boxes show the same thing.")
         z1, z2, z3 = st.columns(3)
         cl_x = z1.number_input("X̄̄ — grand mean (mL)", value=None, step=0.01, format="%.2f", key="cl_x")
         cl_r = z2.number_input("R̄ — mean range (mL)", value=None, step=0.01, format="%.2f", key="cl_r")
@@ -1636,6 +1645,9 @@ def main():
         field_border_css({"cl_x": _fstate(cl_x, lim["xbarbar"], 0.05),
                           "cl_r": _fstate(cl_r, lim["rbar"], 0.05),
                           "cl_p": _fstate(cl_p, plim["pbar"], 0.002)})
+        field_status([("X̄̄", _fstate(cl_x, lim["xbarbar"], 0.05)),
+                      ("R̄", _fstate(cl_r, lim["rbar"], 0.05)),
+                      ("p̄", _fstate(cl_p, plim["pbar"], 0.002))])
         cl_wrong = [(nm, v) for nm, v, t, tol in cl_fields if v is not None and abs(v - t) > tol]
         cl_ok = all(v is not None and abs(v - t) <= tol for _, v, t, tol in cl_fields)
         if cl_ok:
@@ -1695,8 +1707,10 @@ def main():
             "sel_d4": (None if sd4 is None else sd4 == kf["D4"]),
         })
         if any(v is not None for v in (sa2, sd3, sd4)):
-            st.caption(f"Correct so far: **{n_const} / 3** — each box turns green when it matches "
-                       f"the n = {n} row.")
+            field_status([("A₂", None if sa2 is None else sa2 == kf["A2"]),
+                          ("D₃", None if sd3 is None else sd3 == kf["D3"]),
+                          ("D₄", None if sd4 is None else sd4 == kf["D4"])])
+            st.caption(f"Each box turns green when it matches the n = {n} row.")
         if not const_ok:
             if all(v is not None for v in (sa2, sd3, sd4)):
                 st.warning(f"Not all from the n = {n} row yet — recheck the ones still off.")
@@ -1734,7 +1748,14 @@ def main():
             "c_ur": _fstate(ar_u, lim["ucl_r"], 0.15), "c_lr": _fstate(ar_l, lim["lcl_r"], 0.08),
             "c_up": _fstate(ap_u, plim["ucl"], 0.003), "c_lp": _fstate(ap_l, plim["lcl"], 0.003),
         })
-        st.caption(f"Correct so far: **{n_ok} / 6** — each box turns green as its value becomes correct.")
+        field_status([("UCL X̄", _fstate(ax_u, lim["ucl_x"], 0.15)),
+                      ("LCL X̄", _fstate(ax_l, lim["lcl_x"], 0.15)),
+                      ("UCL R", _fstate(ar_u, lim["ucl_r"], 0.15)),
+                      ("LCL R", _fstate(ar_l, lim["lcl_r"], 0.08)),
+                      ("UCL p", _fstate(ap_u, plim["ucl"], 0.003)),
+                      ("LCL p", _fstate(ap_l, plim["lcl"], 0.003))])
+        st.caption(f"Correct so far: **{n_ok} / 6** — a box turns green as its value becomes correct "
+                   "and stays red until it does.")
         ctx = dict(xbb=lim["xbarbar"], rbar=lim["rbar"], pbar=plim["pbar"],
                    a2=kf["A2"], d3=kf["D3"], d4=kf["D4"], ucl_x=lim["ucl_x"], lcl_x=lim["lcl_x"],
                    ucl_r=lim["ucl_r"], lcl_r=lim["lcl_r"], ucl_p=plim["ucl"], lcl_p=plim["lcl"],
