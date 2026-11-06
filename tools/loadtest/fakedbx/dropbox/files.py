@@ -1,0 +1,2 @@
+class WriteMode:
+    overwrite = "overwrite"
