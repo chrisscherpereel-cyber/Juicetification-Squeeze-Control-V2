@@ -1,0 +1,12 @@
+# Performance settings for Streamlit Community Cloud (shared, limited CPU).
+
+[runner]
+# Streamlit runs a FULL garbage collection (gc.collect(2)) after every script
+# run, for every session. Profiling this app with 20 simulated students showed
+# that forced pass consuming ~1/3 of all server CPU. Python's normal automatic
+# GC still runs; memory stayed flat in 40-student load tests with this off
+# (see PERFORMANCE.md). Set back to true if memory ever creeps up.
+postScriptGC = false
+
+[browser]
+gatherUsageStats = false

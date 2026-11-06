@@ -37,7 +37,7 @@ streamlit run juicetification.py
 
 Then open the URL Streamlit prints (usually `http://localhost:8501`). Use the sidebar to set the **simulation speed** and the **number of weeks to diagnose**.
 
-> **Note:** requires Streamlit **1.30+** (the calculation steps use empty‑by‑default number inputs).
+> **Note:** requires Streamlit **1.63+** (see PERFORMANCE.md) (the calculation steps use empty‑by‑default number inputs).
 
 ## Every student gets a different problem
 

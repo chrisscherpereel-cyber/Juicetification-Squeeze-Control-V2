@@ -27,6 +27,7 @@ Teaches Statistical Process Control with a juice-bottling story.
 
 import time
 import io
+import json
 import hashlib
 import numpy as np
 import pandas as pd
@@ -38,6 +39,7 @@ from plotly.subplots import make_subplots
 from juice_director import resolve_config, serve_manifest_if_requested
 from manifest import MANIFEST
 import student_store as store
+from write_behind import WriteBehind
 
 serve_manifest_if_requested(MANIFEST)          # (A) ?manifest=1 → emit schema & stop
 CFG, CTX = resolve_config(MANIFEST)            # (B) instructor config → params, context
@@ -450,10 +452,10 @@ def inject_theme():
             border-radius:20px;padding:3px 10px;font-size:.76rem;color:#3a424e;white-space:nowrap}
       .chip i{width:9px;height:9px;border-radius:50%;display:inline-block}
       /* Make click buttons obvious: accent border + tint, stronger on hover */
-      .stButton>button{border:2px solid #ff7a00 !important;background:#fff7ee !important;
+      .stButton>button,.stFormSubmitButton>button{border:2px solid #ff7a00 !important;background:#fff7ee !important;
             color:#b45309 !important;font-weight:700 !important;border-radius:10px !important;
             box-shadow:0 1px 2px rgba(20,30,50,.06)}
-      .stButton>button:hover{background:#ff7a00 !important;color:#fff !important;
+      .stButton>button:hover,.stFormSubmitButton>button:hover{background:#ff7a00 !important;color:#fff !important;
             border-color:#e86f00 !important}
       .stButton>button[kind="primary"]{background:#ff7a00 !important;color:#fff !important;
             border-color:#e86f00 !important}
@@ -790,7 +792,53 @@ def p_chart_fig(counts, pbar, ucl, lcl, n_inspect=P_INSPECT, neutral=False,
 
 def week_figure(means, ranges, fracs, lim, plim, upto, flags=None, reveal=False):
     """One stacked figure with the three charts, drawn up to `upto` points."""
+    fig = _week_base_figure(means, ranges, fracs, lim, plim)
+    _set_week_frame(fig, means, ranges, fracs, plim, upto, flags, reveal)
+    return fig
+
+
+def _week_data_traces(fig):
+    """The X-bar, R and p data traces (the only 'lines+markers' traces, in row order)."""
+    return [t for t in fig.data if t.mode == "lines+markers"]
+
+
+def _set_week_frame(fig, means, ranges, fracs, plim, upto, flags=None, reveal=False):
+    """Point the three data traces at the first `upto` points.
+
+    Performance: the static part of the figure (subplots, zones, limit lines,
+    labels, axis ranges) is identical for every animation frame, so it is built
+    once by _week_base_figure and only these three traces are updated per frame.
+    Rebuilding the whole make_subplots figure each frame cost ~25 ms × 24 frames
+    × 2 animations per week for every student. Output is identical to the old
+    per-frame rebuild (verified in tests/test_equivalence.py)."""
     flags = flags or {"x": set(), "r": set(), "p": set()}
+    x = list(range(1, upto + 1))
+    xc = [FLAG_COLOR if (reveal and i in flags["x"]) else NAVY for i in range(upto)]
+    xsz = [15 if (reveal and i in flags["x"]) else 9 for i in range(upto)]
+    rc = [FLAG_COLOR if (reveal and i in flags["r"]) else NAVY for i in range(upto)]
+    rsz = [15 if (reveal and i in flags["r"]) else 9 for i in range(upto)]
+    pv = fracs[:upto]
+    pfill = [BAD_COLOR if (reveal and (v > plim["ucl"] or v < plim["lcl"])) else GOOD_COLOR for v in pv]
+    pline = [FLAG_COLOR if (reveal and i in flags["p"]) else "white" for i in range(upto)]
+    pwid = [2 if (reveal and i in flags["p"]) else 1 for i in range(upto)]
+    psz = [16 if (reveal and i in flags["p"]) else 10 for i in range(upto)]
+    with fig.batch_update():
+        tx, tr, tp = _week_data_traces(fig)
+        tx.x, tx.y = x, means[:upto]
+        tx.marker.size, tx.marker.color = xsz, xc
+        tr.x, tr.y = x, ranges[:upto]
+        tr.marker.size, tr.marker.color = rsz, rc
+        tp.x, tp.y = x, pv
+        tp.marker.size, tp.marker.color = psz, pfill
+        tp.marker.line.color, tp.marker.line.width = pline, pwid
+    return fig
+
+
+def _week_base_figure(means, ranges, fracs, lim, plim):
+    """Static scaffold of the weekly three-chart figure (data traces empty)."""
+    upto = 0
+    flags = {"x": set(), "r": set(), "p": set()}
+    reveal = False
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.09,
                         subplot_titles=("X-bar — mean fill (mL)", "R — range (mL)",
                                         "p — fraction defective"))
@@ -925,7 +973,7 @@ def animate_collection(chart_ph, bottle_ph, grid_ph, data, pcounts, delay, p_ins
                           xaxis_title="Shift", yaxis_title="Mean fill (mL)",
                           margin=dict(l=10, r=10, t=40, b=10))
         fig.update_xaxes(range=xr); fig.update_yaxes(range=yr)
-        chart_ph.plotly_chart(fig, use_container_width=True, key=f"col_{i}")
+        chart_ph.plotly_chart(fig, width="stretch", key=f"col_{i}")
         if delay > 0:
             time.sleep(delay)
 
@@ -934,12 +982,13 @@ def animate_week(ph, means, ranges, fracs, lim, plim, flags, delay, reveal, tag)
     n = len(means)
     if delay <= 0:
         ph.plotly_chart(week_figure(means, ranges, fracs, lim, plim, n, flags, reveal),
-                        use_container_width=True, key=f"wk_{tag}_final")
+                        width="stretch", key=f"wk_{tag}_final")
         return
+    fig = _week_base_figure(means, ranges, fracs, lim, plim)   # built once, not per frame
     for i in range(1, n + 1):
         fl = {c: {k for k in flags[c] if k < i} for c in flags} if reveal else flags
-        ph.plotly_chart(week_figure(means, ranges, fracs, lim, plim, i, fl, reveal),
-                        use_container_width=True, key=f"wk_{tag}_{i}")
+        _set_week_frame(fig, means, ranges, fracs, plim, i, fl, reveal)
+        ph.plotly_chart(fig, width="stretch", key=f"wk_{tag}_{i}")
         time.sleep(delay)
 
 
@@ -1032,13 +1081,52 @@ def progress_snapshot():
     return snap
 
 
+@st.cache_resource(show_spinner=False)
+def _autosaver():
+    """One background write-behind queue per server process (see write_behind.py)."""
+    return WriteBehind(lambda key, snap: store.save(key[0], key[1], snap), workers=4)
+
+
+def _snapshot_hash(snap):
+    return hashlib.sha256(json.dumps(snap, sort_keys=True, separators=(",", ":"),
+                                     default=str).encode()).hexdigest()
+
+
 def autosave():
-    """Persist progress after a meaningful step. Best-effort; never crashes the lab."""
-    if store.enabled() and SID:
-        try:
-            store.save(GAME, SID, progress_snapshot())
-        except Exception:
-            pass
+    """Persist progress after a meaningful step. Best-effort; never crashes the lab.
+
+    Performance: this used to upload to Dropbox synchronously on every call —
+    and Act 2 calls it on every rerun — so each answer waited for a Dropbox
+    round trip. Now (1) an unchanged snapshot is not re-uploaded at all, and
+    (2) changed snapshots are handed to a background queue that coalesces
+    them per student (latest wins, strictly in order). The stored data is the
+    same; only the page no longer waits for the upload."""
+    if not (store.enabled() and SID):
+        return
+    try:
+        snap = progress_snapshot()
+        h = _snapshot_hash(snap)
+        saver = _autosaver()
+        if st.session_state.get("_saved_hash") == h and (GAME, SID) not in saver.failed:
+            return                      # identical to what's already stored/queued
+        st.session_state["_saved_hash"] = h
+        saver.submit((GAME, SID), snap)
+    except Exception:
+        pass
+
+
+def save_now():
+    """Synchronous save (explicit 'Save progress' button): the student is told
+    it's saved, so wait for Dropbox — after any queued autosave for them."""
+    if not (store.enabled() and SID):
+        return
+    try:
+        _autosaver().cancel((GAME, SID))
+        snap = progress_snapshot()
+        store.save(GAME, SID, snap)
+        st.session_state["_saved_hash"] = _snapshot_hash(snap)
+    except Exception:
+        pass
 
 
 def restart_game():
@@ -1046,6 +1134,7 @@ def restart_game():
     restore_progress() would immediately reload the finished game after clear()."""
     if store.enabled() and SID:
         try:
+            _autosaver().cancel((GAME, SID))   # no queued autosave may land after the reset
             store.save(GAME, SID, {})       # blank record → restore() finds nothing
         except Exception:
             pass
@@ -1060,6 +1149,9 @@ def restore_progress():
         return
     ss["_restored"] = True
     try:
+        # A just-refreshed tab must see the student's latest autosave, which may
+        # still be in the background queue (same server process).
+        _autosaver().flush((GAME, SID), timeout=15)
         saved = store.load(GAME, SID)
     except Exception:
         saved = {}
@@ -1095,21 +1187,43 @@ def clean_baseline(sub_n, p_inspect, rng, tries=400):
     return sub, pc
 
 
-def data_download_buttons(df, stem, key_prefix, label="this data"):
-    """Render CSV + Excel download buttons for an analyzable table."""
-    c1, c2 = st.columns(2)
+@st.cache_data(max_entries=512, ttl=7200, show_spinner=False)
+def _export_bytes(df):
+    """CSV and Excel bytes for a table, built once per distinct table.
+
+    Performance: the download buttons sit on pages that rerun on every answer
+    (Act 2) and every click (Act 3), and Streamlit executes the code inside
+    collapsed expanders too — so the Excel workbook used to be rebuilt with
+    openpyxl on every rerun. The cache key is the table's *content*, so a
+    student can only ever receive bytes for exactly the data they are viewing
+    (no cross-student leakage); entries are small (a few KB) and bounded."""
     csv = df.to_csv(index=False).encode("utf-8-sig")   # BOM so Excel keeps headers/units
-    c1.download_button(f"⬇️ Download {label} (CSV)", csv, file_name=f"{stem}.csv",
-                       mime="text/csv", key=f"{key_prefix}_csv", use_container_width=True)
     try:
         buf = io.BytesIO()
         with pd.ExcelWriter(buf, engine="openpyxl") as xl:
             df.to_excel(xl, index=False, sheet_name="Data")
-        c2.download_button(f"⬇️ Download {label} (Excel)", buf.getvalue(),
+        xlsx = buf.getvalue()
+    except Exception:
+        xlsx = None
+    return csv, xlsx
+
+
+def data_download_buttons(df, stem, key_prefix, label="this data"):
+    """Render CSV + Excel download buttons for an analyzable table."""
+    c1, c2 = st.columns(2)
+    csv, xlsx = _export_bytes(df)
+    # on_click="ignore": downloading no longer triggers a full-page rerun.
+    c1.download_button(f"⬇️ Download {label} (CSV)", csv, file_name=f"{stem}.csv",
+                       mime="text/csv", key=f"{key_prefix}_csv", width="stretch",
+                       on_click="ignore")
+    try:
+        if xlsx is None:
+            raise RuntimeError("openpyxl unavailable")
+        c2.download_button(f"⬇️ Download {label} (Excel)", xlsx,
                            file_name=f"{stem}.xlsx",
                            mime="application/vnd.openxmlformats-officedocument."
                                 "spreadsheetml.sheet",
-                           key=f"{key_prefix}_xlsx", use_container_width=True)
+                           key=f"{key_prefix}_xlsx", width="stretch", on_click="ignore")
     except Exception:
         c2.caption("Excel export needs the openpyxl package (see requirements.txt); "
                    "the CSV works everywhere.")
@@ -1230,6 +1344,21 @@ def new_us_round():
     request_scroll()            # new week → land at the top
 
 
+def static_week_figure(means, ranges, fracs, lim, plim, flags, reveal):
+    """The finished (non-animated) weekly figure, built once per week & reveal
+    state and kept in this student's session (Act 3 reruns on every OCAP click;
+    rebuilding the 3-row subplot figure each time cost ~25 ms of CPU)."""
+    ss = st.session_state
+    token = (reveal, hashlib.sha1(b"".join(np.ascontiguousarray(a, dtype=float).tobytes()
+                                           for a in (means, ranges, fracs))).hexdigest(),
+             repr(sorted((c, sorted(v)) for c, v in flags.items())))
+    cached = ss.get("_wk_fig")
+    if cached is None or cached[0] != token:
+        cached = (token, week_figure(means, ranges, fracs, lim, plim, len(means), flags, reveal))
+        ss["_wk_fig"] = cached
+    return cached[1]
+
+
 def us_detection():
     """Recompute the three detections for the current US week."""
     ss = st.session_state
@@ -1318,7 +1447,7 @@ def main():
             pnl_cards(ss.shipped_bad, ss.stopped_good)
         if store.enabled() and SID:
             if st.button("💾 Save progress"):
-                autosave()
+                save_now()
                 st.toast("Progress saved — sign in with the same ID to resume.")
         if st.button("↺ Restart game"):
             restart_game()
@@ -1355,7 +1484,7 @@ def main():
             fig.update_layout(height=340, showlegend=False, title="Rotterdam baseline (in control)",
                               xaxis_title="Shift", yaxis_title="Mean fill (mL)",
                               margin=dict(l=10, r=10, t=40, b=10))
-            chart_ph.plotly_chart(fig, use_container_width=True, key="a1_final")
+            chart_ph.plotly_chart(fig, width="stretch", key="a1_final")
             bottle_ph.markdown(bottle_svg(1.0), unsafe_allow_html=True)
             grid_ph.markdown(inspection_scene_svg(ss.p_inspect, int(ss.p_baseline[-1])),
                              unsafe_allow_html=True)
@@ -1370,7 +1499,7 @@ def main():
                                title="Defects per shift (baseline)", xaxis_title="Shift",
                                yaxis_title=f"Defective bottles (of {ss.p_inspect})",
                                margin=dict(l=10, r=10, t=40, b=10))
-            st.plotly_chart(dfig, use_container_width=True, key="a1_defects")
+            st.plotly_chart(dfig, width="stretch", key="a1_defects")
             st.markdown(f'<div class="okbox">✅ Collected {N_BASELINE} subgroups · grand mean ≈ '
                         f'{means.mean():.2f} mL · avg defects/shift ≈ {ss.p_baseline.mean():.1f}</div>',
                         unsafe_allow_html=True)
@@ -1445,7 +1574,7 @@ def main():
                 yy = ss.funnel_you
                 lv = [TARGET_FILL + float(noise[j]) for j in range(mm)]
                 funnel_ph.plotly_chart(funnel_fig(yy, lv, WITHIN_SIGMA, show_you=mm > 0),
-                                       use_container_width=True, key=key)
+                                       width="stretch", key=key)
             render_funnel()
             m = ss.funnel_i
             you = ss.funnel_you
@@ -1607,7 +1736,7 @@ def main():
         for b in range(n):
             table[f"Bottle {b+1}"] = [round(float(sub[i, b]), 1) for i in range(N_BASELINE)]
         table["Defects"] = [int(pc[i]) for i in range(N_BASELINE)]
-        st.dataframe(table, use_container_width=True, hide_index=True,
+        st.dataframe(table, width="stretch", hide_index=True,
                      height=min((N_BASELINE + 1) * 35 + 3, 900))
         st.caption(f"Totals: {N_BASELINE} shifts · {n} bottles measured each shift for fill "
                    f"· {ss.p_inspect} bottles inspected each shift "
@@ -1690,7 +1819,7 @@ def main():
             kk = SPC_CONSTANTS[nn]
             tbl["n"].append(nn); tbl["A₂"].append(kk["A2"])
             tbl["D₃"].append(kk["D3"]); tbl["D₄"].append(kk["D4"])
-        st.dataframe(tbl, use_container_width=True, hide_index=True)
+        st.dataframe(tbl, width="stretch", hide_index=True)
         fmt = lambda v: "—" if v is None else f"{v:.3f}"
         a2o = [None] + sorted({SPC_CONSTANTS[i]["A2"] for i in SPC_CONSTANTS})
         d3o = [None] + sorted({SPC_CONSTANTS[i]["D3"] for i in SPC_CONSTANTS})
@@ -1809,12 +1938,12 @@ def main():
         c1, c2 = st.columns(2)
         c1.plotly_chart(single_chart(lim["means"], lim["xbarbar"], lim["ucl_x"], lim["lcl_x"],
                         "X-bar (baseline)", "Mean fill (mL)", sigma=lim["sigma_xbar"]),
-                        use_container_width=True, key="a2_x")
+                        width="stretch", key="a2_x")
         c2.plotly_chart(single_chart(lim["ranges"], lim["rbar"], lim["ucl_r"], lim["lcl_r"],
-                        "R (baseline)", "Range (mL)"), use_container_width=True, key="a2_r")
+                        "R (baseline)", "Range (mL)"), width="stretch", key="a2_r")
         st.plotly_chart(p_chart_fig(ss.p_baseline, plim["pbar"], plim["ucl"], plim["lcl"],
                         n_inspect=ss.p_inspect, neutral=True, title="p-chart (baseline)"),
-                        use_container_width=True, key="a2_p")
+                        width="stretch", key="a2_p")
         st.caption("🟠 The **amber band** on each chart is the *warning zone* — the outer third "
                    "between 2σ and the 3σ control limit. A single point there is normal, but "
                    "**two points in a row** in the band is a signal the process is drifting.")
@@ -1894,22 +2023,26 @@ def main():
                              reveal=False, tag="pre")
                 ss.stream_done = True
             else:
-                chart_ph.plotly_chart(week_figure(means, ranges, fracs, lim, plim, len(means),
-                                      flags, reveal=False), use_container_width=True, key="wk_pre_static")
+                chart_ph.plotly_chart(static_week_figure(means, ranges, fracs, lim, plim, flags,
+                                                         reveal=False), width="stretch", key="wk_pre_static")
 
             st.write("**Diagnose each chart** — leave a box on **Process in control** if that "
                      "chart shows no signal:")
-            cx, cr, cp = st.columns(3)
-            px = cx.multiselect("X-bar signals", list(RULE_LABELS), key="pick_x",
-                                placeholder="Process in control",
-                                format_func=lambda k: RULE_LABELS[k])
-            pr = cr.multiselect("R signals", list(RULE_LABELS), key="pick_r",
-                                placeholder="Process in control",
-                                format_func=lambda k: RULE_LABELS[k])
-            pp = cp.multiselect("p signals", list(RULE_LABELS), key="pick_p",
-                                placeholder="Process in control",
-                                format_func=lambda k: RULE_LABELS[k])
-            if st.button("🔍 Submit analysis"):
+            # A form: picking signals no longer reruns the whole page (and rebuilds
+            # the three-chart figure) on every selection — only Submit does.
+            with st.form("diagnosis_form", border=False, enter_to_submit=False):
+                cx, cr, cp = st.columns(3)
+                px = cx.multiselect("X-bar signals", list(RULE_LABELS), key="pick_x",
+                                    placeholder="Process in control",
+                                    format_func=lambda k: RULE_LABELS[k])
+                pr = cr.multiselect("R signals", list(RULE_LABELS), key="pick_r",
+                                    placeholder="Process in control",
+                                    format_func=lambda k: RULE_LABELS[k])
+                pp = cp.multiselect("p signals", list(RULE_LABELS), key="pick_p",
+                                    placeholder="Process in control",
+                                    format_func=lambda k: RULE_LABELS[k])
+                submitted = st.form_submit_button("🔍 Submit analysis")
+            if submitted:
                 picks = {"x": set(px), "r": set(pr), "p": set(pp)}
                 total_missed = total_false = total_hits = total_sig = 0
                 for c in ("x", "r", "p"):
@@ -1940,8 +2073,8 @@ def main():
                              reveal=True, tag="rev")
                 ss.reveal_pending = False
             else:
-                chart_ph.plotly_chart(week_figure(means, ranges, fracs, lim, plim, len(means),
-                                      flags, reveal=True), use_container_width=True, key="wk_rev_static")
+                chart_ph.plotly_chart(static_week_figure(means, ranges, fracs, lim, plim, flags,
+                                                         reveal=True), width="stretch", key="wk_rev_static")
 
             any_signal = any(truth.values())
             names = {"x": "X-bar", "r": "R", "p": "p"}
