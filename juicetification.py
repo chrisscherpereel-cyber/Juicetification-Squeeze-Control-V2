@@ -39,6 +39,7 @@ from plotly.subplots import make_subplots
 from juice_director import resolve_config, serve_manifest_if_requested
 from manifest import MANIFEST
 import student_store as store
+from login_gate import require_login
 from write_behind import WriteBehind
 
 serve_manifest_if_requested(MANIFEST)          # (A) ?manifest=1 → emit schema & stop
@@ -1384,19 +1385,8 @@ def main():
     st.set_page_config(page_title="Juicetification: Squeeze Control", page_icon="🧃", layout="wide")
 
     # Student sign-in gate — only when storage is configured (else behave as today).
-    if store.enabled() and SID is None:
-        st.markdown("## 🧃 Juicetification: Squeeze Control")
-        st.write("Your progress is **saved automatically** as you go. You can stop anytime and "
-                 "pick up right where you left off — just **sign in with the same student ID**.")
-        entered = st.text_input("Enter your student ID", key="_sid_entry",
-                                help="Use the exact same ID each time to resume your progress.")
-        if st.button("Start / Resume", type="primary"):
-            if entered.strip():
-                store.set_student_id(entered.strip())
-                st.rerun()
-            else:
-                st.warning("Please enter a student ID.")
-        st.stop()
+    if SID is None:
+        require_login("Squeeze Control", "🧃")      # shared sign-in screen (login_gate.py)
 
     init_state()
     inject_theme()
